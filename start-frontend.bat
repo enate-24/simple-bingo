@@ -1,0 +1,3 @@
+@echo off
+echo Starting frontend...
+call npm run dev
