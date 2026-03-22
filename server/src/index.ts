@@ -29,7 +29,7 @@ app.use(cors({
 app.use(express.json());
 
 // Health check - keeps Render from sleeping
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '2' }));
 
 // Get current open game status (for operator to resume)
 app.get('/api/game/status', async (req, res) => {
