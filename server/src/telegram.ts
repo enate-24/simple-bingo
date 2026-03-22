@@ -33,8 +33,11 @@ export async function sendTelegramMessage(message: string): Promise<void> {
   const operatorName = settings['operator_name'] || '';
   const customMessage = settings['custom_message'] || '';
 
+  console.log('[Telegram] token:', token ? token.slice(0, 10) + '...' : 'MISSING');
+  console.log('[Telegram] chatId:', chatId || 'MISSING');
+
   if (!token || !chatId) {
-    console.warn('Telegram not configured — BOT_TOKEN or GROUP_CHAT_ID missing');
+    console.warn('[Telegram] Not configured — BOT_TOKEN or GROUP_CHAT_ID missing');
     return;
   }
 
@@ -53,11 +56,11 @@ export async function sendTelegramMessage(message: string): Promise<void> {
     });
     const data = await res.json() as any;
     if (!data.ok) {
-      console.error('Telegram API error:', data.description);
+      console.error('[Telegram] API error:', data.description);
     } else {
-      console.log('Telegram message sent ✓');
+      console.log('[Telegram] Message sent ✓ id:', data.result?.message_id);
     }
   } catch (err: any) {
-    console.error('Telegram fetch error:', err?.message || err);
+    console.error('[Telegram] fetch error:', err?.message || err);
   }
 }
