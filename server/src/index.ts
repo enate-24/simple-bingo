@@ -794,7 +794,7 @@ function startBroadcast(config: typeof broadcastConfig) {
     } catch (e) {
       console.error('Broadcast error:', e);
     }
-  }, 30000);
+  }, 120000);
 }
 
 // Cartela stock routes
