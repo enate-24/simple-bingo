@@ -21,6 +21,7 @@ interface GameConfig {
   prize1: string;
   prize2: string;
   prize3: string;
+  totalCartelas: string;
 }
 
 export default function Game() {
@@ -30,7 +31,7 @@ export default function Game() {
 
   // Setup screen
   const [gameConfig, setGameConfig] = useState<GameConfig | null>(null);
-  const [setupForm, setSetupForm] = useState<GameConfig>({ cartelaPrice: '30', prize1: '', prize2: '', prize3: '' });
+  const [setupForm, setSetupForm] = useState<GameConfig>({ cartelaPrice: '30', prize1: '', prize2: '', prize3: '', totalCartelas: '20' });
   const [setupErrors, setSetupErrors] = useState<Partial<GameConfig>>({});
   const [statusLoading, setStatusLoading] = useState(true);
 
@@ -76,6 +77,7 @@ export default function Game() {
               prize1: String(data.prize1),
               prize2: String(data.prize2),
               prize3: String(data.prize3),
+              totalCartelas: String(data.totalCartelas ?? 20),
             });
           }
         }
@@ -97,6 +99,7 @@ export default function Game() {
   }, [fetchStock]);
 
   const soldSet = useMemo(() => new Set(stock?.sold_numbers ?? []), [stock?.sold_numbers]);
+  const GAME_TOTAL = gameConfig ? Number(gameConfig.totalCartelas) : TOTAL;
   const allSold = stock ? stock.remaining === 0 : false;
 
   const playShuffleSound = (): Promise<void> =>
@@ -127,6 +130,8 @@ export default function Game() {
 
   const validateSetup = () => {
     const errs: Partial<GameConfig> = {};
+    if (!setupForm.totalCartelas || isNaN(Number(setupForm.totalCartelas)) || Number(setupForm.totalCartelas) < 1)
+      errs.totalCartelas = 'Required';
     if (!setupForm.cartelaPrice || isNaN(Number(setupForm.cartelaPrice)) || Number(setupForm.cartelaPrice) <= 0)
       errs.cartelaPrice = 'Required';
     if (!setupForm.prize1 || isNaN(Number(setupForm.prize1)) || Number(setupForm.prize1) <= 0)
@@ -138,11 +143,26 @@ export default function Game() {
     return errs;
   };
 
-  const handleStartGame = () => {
+  const handleStartGame = async () => {
     const errs = validateSetup();
     if (Object.keys(errs).length > 0) { setSetupErrors(errs); return; }
     setSetupErrors({});
+    // Reset stock with operator-chosen total and game config
+    try {
+      await fetch(`${API_URL}/api/admin/cartelas/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          total_cartelas: Number(setupForm.totalCartelas),
+          cartela_price: setupForm.cartelaPrice,
+          prize_1: setupForm.prize1,
+          prize_2: setupForm.prize2,
+          prize_3: setupForm.prize3,
+        })
+      });
+    } catch {}
     setGameConfig({ ...setupForm });
+    await fetchStock();
   };
 
   const handleNumberClick = (num: number) => {
@@ -225,6 +245,20 @@ export default function Game() {
           </div>
 
           <div className="space-y-4">
+            {/* Total cartelas */}
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-1">Total Cartelas</label>
+              <input
+                type="number"
+                min="1"
+                placeholder="e.g. 20"
+                value={setupForm.totalCartelas}
+                onChange={e => setSetupForm(f => ({ ...f, totalCartelas: e.target.value }))}
+                className={`w-full px-4 py-2.5 border-2 rounded-xl outline-none text-slate-800 text-sm ${setupErrors.totalCartelas ? 'border-red-400' : 'border-slate-200 focus:border-indigo-500'}`}
+              />
+              {setupErrors.totalCartelas && <p className="text-red-500 text-xs mt-1">{setupErrors.totalCartelas}</p>}
+            </div>
+
             {/* Cartela price */}
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-1">Cartela Price (Birr)</label>
@@ -315,7 +349,7 @@ export default function Game() {
             </p>
 
             <div className="grid grid-cols-4 xs:grid-cols-5 gap-2 sm:gap-3 mb-4">
-              {Array.from({ length: TOTAL }, (_, i) => i + 1).map(num => {
+              {Array.from({ length: GAME_TOTAL }, (_, i) => i + 1).map(num => {
                 const isSold = soldSet.has(num);
                 return (
                   <button
@@ -424,13 +458,13 @@ export default function Game() {
                         await fetch(`${API_URL}/api/admin/cartelas/reset`, {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                          body: JSON.stringify({ total_cartelas: 20 })
+                          body: JSON.stringify({ total_cartelas: GAME_TOTAL })
                         });
                       } catch {}
                       setGameConfig(null);
                       setDrawnNumbers([]);
                       setSoldEntries([]);
-                      setSetupForm({ cartelaPrice: '30', prize1: '', prize2: '', prize3: '' });
+                      setSetupForm({ cartelaPrice: '30', prize1: '', prize2: '', prize3: '', totalCartelas: '20' });
                       setStock(null);
                     }}
                     className="w-full py-3 sm:py-4 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-bold text-sm sm:text-lg flex items-center justify-center gap-2 shadow-2xl"
@@ -444,7 +478,7 @@ export default function Game() {
             <div className="rounded-xl p-4 text-center border bg-indigo-500/10 border-indigo-400/20">
               <div className="flex items-center justify-center gap-2 text-indigo-300 text-sm">
                 <Clock className="w-4 h-4 animate-pulse" />
-                Draw starts when all {TOTAL} cartelas are registered
+                Draw starts when all {GAME_TOTAL} cartelas are registered
               </div>
             </div>
           )}
