@@ -623,6 +623,13 @@ app.get('/api/admin/settings', authMiddleware, async (req: AuthRequest, res) => 
 app.post('/api/admin/settings', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const settings: Record<string, string> = req.body;
+
+    // Check if telegram was configured before
+    const existing = await pool.query(
+      `SELECT value FROM system_settings WHERE key = 'telegram_bot_token'`
+    );
+    const isFirstTime = existing.rows.length === 0 || !existing.rows[0].value;
+
     for (const [key, value] of Object.entries(settings)) {
       await pool.query(
         `INSERT INTO system_settings (key, value, updated_at) VALUES ($1, $2, NOW())
@@ -631,6 +638,39 @@ app.post('/api/admin/settings', authMiddleware, async (req: AuthRequest, res) =>
       );
     }
     invalidateSettingsCache();
+
+    // Send self-deleting welcome message on first-time Telegram config
+    const newToken = settings['telegram_bot_token'];
+    const newChatId = settings['telegram_group_chat_id'];
+    if (isFirstTime && newToken && newChatId) {
+      try {
+        const url = `https://api.telegram.org/bot${newToken}/sendMessage`;
+        const msgRes = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: newChatId,
+            text: `✅ <b>Bot Connected!</b>\n\nThis system is now linked to this group.\n\n<i>This message will be deleted in 1 minute.</i>`,
+            parse_mode: 'HTML',
+          }),
+        });
+        const msgData = await msgRes.json() as any;
+        if (msgData.ok) {
+          const messageId = msgData.result.message_id;
+          // Delete after 60 seconds
+          setTimeout(async () => {
+            await fetch(`https://api.telegram.org/bot${newToken}/deleteMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: newChatId, message_id: messageId }),
+            });
+          }, 60000);
+        }
+      } catch (e) {
+        console.error('Welcome message error:', e);
+      }
+    }
+
     res.json({ success: true });
   } catch { res.status(500).json({ error: 'Failed to save settings' }); }
 });
@@ -772,7 +812,7 @@ app.patch('/api/admin/cartelas/stock', authMiddleware, adminMiddleware, async (r
   }
 });
 
-app.post('/api/admin/cartelas/reset', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
+app.post('/api/admin/cartelas/reset', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { total_cartelas, cartela_price, prize_1, prize_2, prize_3 } = req.body;
     const total = total_cartelas ?? 20;
