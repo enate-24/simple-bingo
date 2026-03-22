@@ -174,7 +174,7 @@ app.get('/api/user/transactions', authMiddleware, async (req: AuthRequest, res) 
 app.post('/api/game/start', authMiddleware, async (req: AuthRequest, res) => {
   const client = await pool.connect();
   try {
-    const { selected_numbers, phone_number, cartela_price, prize1, prize2, prize3 } = req.body;
+    const { selected_numbers, phone_number, customer_name, cartela_price, prize1, prize2, prize3 } = req.body;
 
     if (!selected_numbers || !Array.isArray(selected_numbers) || selected_numbers.length === 0) {
       return res.status(400).json({ error: 'Selected numbers are required' });
@@ -243,8 +243,8 @@ app.post('/api/game/start', authMiddleware, async (req: AuthRequest, res) => {
     if (roundResult.rows.length > 0) {
       const roundId = roundResult.rows[0].id;
       await client.query(
-        'INSERT INTO cartela_purchases (round_id, cartela_number, customer_phone) VALUES ($1, $2, $3)',
-        [roundId, selected_numbers[0], phone_number || 'N/A']
+        'INSERT INTO cartela_purchases (round_id, cartela_number, customer_phone, customer_name) VALUES ($1, $2, $3, $4)',
+        [roundId, selected_numbers[0], phone_number || 'N/A', customer_name || null]
       );
       // Save game config to round if not already set
       await client.query(
@@ -540,21 +540,28 @@ app.post('/api/admin/rounds/winners', authMiddleware, async (req: AuthRequest, r
     const roundId = round.id;
     const prizes = [round.prize_1, round.prize_2, round.prize_3];
 
-    // Look up phone numbers for each winner cartela
-    const getPhone = async (cartela: number) => {
+    // Look up phone numbers and names for each winner cartela
+    const getCustomer = async (cartela: number) => {
       const r = await pool.query(
-        'SELECT customer_phone FROM cartela_purchases WHERE round_id = $1 AND cartela_number = $2 LIMIT 1',
+        'SELECT customer_phone, customer_name FROM cartela_purchases WHERE round_id = $1 AND cartela_number = $2 LIMIT 1',
         [roundId, cartela]
       );
-      return r.rows[0]?.customer_phone || 'N/A';
+      const row = r.rows[0];
+      if (!row) return { phone: 'N/A', label: 'N/A' };
+      const masked = maskPhone(row.customer_phone);
+      const label = row.customer_name ? `${row.customer_name} (${masked})` : masked;
+      return { phone: row.customer_phone, label };
     };
 
     const w1 = winners[0]?.cartela_number ?? null;
     const w2 = winners[1]?.cartela_number ?? null;
     const w3 = winners[2]?.cartela_number ?? null;
-    const p1 = w1 ? await getPhone(w1) : null;
-    const p2 = w2 ? await getPhone(w2) : null;
-    const p3 = w3 ? await getPhone(w3) : null;
+    const c1 = w1 ? await getCustomer(w1) : null;
+    const c2 = w2 ? await getCustomer(w2) : null;
+    const c3 = w3 ? await getCustomer(w3) : null;
+    const p1 = c1?.phone ?? null;
+    const p2 = c2?.phone ?? null;
+    const p3 = c3?.phone ?? null;
 
     const isComplete = winners.length >= 3;
 
@@ -570,21 +577,21 @@ app.post('/api/admin/rounds/winners', authMiddleware, async (req: AuthRequest, r
 
     // Send Telegram notification for the latest winner with prize
     const latestWinner = winners[winners.length - 1];
-    const latestPhone = winners.length === 1 ? p1 : winners.length === 2 ? p2 : p3;
+    const latestLabel = winners.length === 1 ? c1?.label : winners.length === 2 ? c2?.label : c3?.label;
     const latestPrize = prizes[winners.length - 1];
     const placeLabels = ['🥇 1st Place', '🥈 2nd Place', '🥉 3rd Place'];
 
     let msg =
       `${placeLabels[winners.length - 1]} <b>Winner!</b>\n\n` +
       `🎟️ <b>Cartela:</b> #${latestWinner.cartela_number}\n` +
-      `📞 <b>Phone:</b> ${latestPhone}\n` +
+      `👤 <b>Customer:</b> ${latestLabel}\n` +
       `💰 <b>Prize:</b> ${latestPrize ? latestPrize + ' Birr' : 'N/A'}`;
 
     if (isComplete) {
       msg += `\n\n🎉 <b>All winners selected!</b>\n\n` +
-        `🥇 Cartela #${w1} — ${p1} — ${prizes[0] ? prizes[0] + ' Birr' : 'N/A'}\n` +
-        `🥈 Cartela #${w2} — ${p2} — ${prizes[1] ? prizes[1] + ' Birr' : 'N/A'}\n` +
-        `🥉 Cartela #${w3} — ${p3} — ${prizes[2] ? prizes[2] + ' Birr' : 'N/A'}`;
+        `🥇 Cartela #${w1} — ${c1?.label} — ${prizes[0] ? prizes[0] + ' Birr' : 'N/A'}\n` +
+        `🥈 Cartela #${w2} — ${c2?.label} — ${prizes[1] ? prizes[1] + ' Birr' : 'N/A'}\n` +
+        `🥉 Cartela #${w3} — ${c3?.label} — ${prizes[2] ? prizes[2] + ' Birr' : 'N/A'}`;
     }
 
     await sendTelegramMessage(msg);
@@ -729,6 +736,13 @@ function stopBroadcast() {
   }
 }
 
+function maskPhone(phone: string): string {
+  const p = phone.replace(/\s/g, '');
+  if (p.length < 7) return p;
+  // Keep first 4 and last 3 chars, mask the middle
+  return p.slice(0, 4) + '***' + p.slice(-3);
+}
+
 async function buildCartelaListMessage(config: typeof broadcastConfig): Promise<string> {
   const s = await pool.query('SELECT total_cartelas, sold_cartelas FROM cartela_stock WHERE id = 1');
   const { total_cartelas, sold_cartelas } = s.rows[0];
@@ -736,22 +750,23 @@ async function buildCartelaListMessage(config: typeof broadcastConfig): Promise<
 
   // Get all purchases for current open round
   const purchasesResult = await pool.query(
-    `SELECT cp.cartela_number, cp.customer_phone
+    `SELECT cp.cartela_number, cp.customer_phone, cp.customer_name
      FROM cartela_purchases cp
      JOIN rounds r ON cp.round_id = r.id
      WHERE r.status = 'open'
      ORDER BY cp.cartela_number ASC`
   );
-  const purchaseMap: Record<number, string> = {};
+  const purchaseMap: Record<number, { phone: string; name: string | null }> = {};
   for (const row of purchasesResult.rows) {
-    purchaseMap[row.cartela_number] = row.customer_phone;
+    purchaseMap[row.cartela_number] = { phone: row.customer_phone, name: row.customer_name };
   }
 
   const lines: string[] = [];
   for (let i = 1; i <= total_cartelas; i++) {
-    const phone = purchaseMap[i];
-    if (phone) {
-      lines.push(`${i} 👉 ${phone} ✅`);
+    const entry = purchaseMap[i];
+    if (entry) {
+      const label = entry.name ? entry.name : maskPhone(entry.phone);
+      lines.push(`${i} 👉 ${label} ✅`);
     } else {
       lines.push(`${i} 👉`);
     }

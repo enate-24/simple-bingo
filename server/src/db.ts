@@ -99,6 +99,7 @@ export const initDatabase = async () => {
         round_id INTEGER REFERENCES rounds(id) ON DELETE CASCADE,
         cartela_number INTEGER NOT NULL,
         customer_phone VARCHAR(20) NOT NULL,
+        customer_name VARCHAR(100),
         purchased_at TIMESTAMP DEFAULT NOW()
       );
 
@@ -146,6 +147,11 @@ export const initDatabase = async () => {
       ALTER TABLE rounds ADD COLUMN IF NOT EXISTS prize_1 DECIMAL(10,2);
       ALTER TABLE rounds ADD COLUMN IF NOT EXISTS prize_2 DECIMAL(10,2);
       ALTER TABLE rounds ADD COLUMN IF NOT EXISTS prize_3 DECIMAL(10,2);
+    `);
+
+    // Ensure customer_name column exists on cartela_purchases (migration)
+    await client.query(`
+      ALTER TABLE cartela_purchases ADD COLUMN IF NOT EXISTS customer_name VARCHAR(100);
     `);
 
     // Ensure active round exists

@@ -7,6 +7,7 @@ const TOTAL = 20;
 interface SoldEntry {
   number: number;
   phone: string;
+  name: string;
 }
 
 interface Stock {
@@ -38,7 +39,9 @@ export default function Game() {
   // Modal
   const [pendingNumber, setPendingNumber] = useState<number | null>(null);
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [customerName, setCustomerName] = useState('');
   const [phoneError, setPhoneError] = useState('');
+  const [nameError, setNameError] = useState('');
   const [isBuying, setIsBuying] = useState(false);
   const [error, setError] = useState('');
 
@@ -170,16 +173,20 @@ export default function Game() {
     setError('');
     setPendingNumber(num);
     setPhoneNumber('');
+    setCustomerName('');
     setPhoneError('');
+    setNameError('');
   };
 
   const confirmBuy = async () => {
+    if (!customerName.trim()) { setNameError('Customer name is required'); return; }
     if (!phoneNumber.trim()) { setPhoneError('Phone number is required'); return; }
     if (!/^[0-9+\s\-]{7,15}$/.test(phoneNumber.trim())) { setPhoneError('Enter a valid phone number'); return; }
     if (pendingNumber === null) return;
 
     setIsBuying(true);
     setPhoneError('');
+    setNameError('');
     try {
       const res = await fetch(`${API_URL}/api/game/start`, {
         method: 'POST',
@@ -187,6 +194,7 @@ export default function Game() {
         body: JSON.stringify({
           selected_numbers: [pendingNumber],
           phone_number: phoneNumber.trim(),
+          customer_name: customerName.trim(),
           cartela_price: gameConfig?.cartelaPrice,
           prize1: gameConfig?.prize1,
           prize2: gameConfig?.prize2,
@@ -199,9 +207,10 @@ export default function Game() {
         setPendingNumber(null);
         return;
       }
-      setSoldEntries(prev => [...prev, { number: pendingNumber, phone: phoneNumber.trim() }]);
+      setSoldEntries(prev => [...prev, { number: pendingNumber, phone: phoneNumber.trim(), name: customerName.trim() }]);
       setPendingNumber(null);
       setPhoneNumber('');
+      setCustomerName('');
       new Audio('/start.wav').play().catch(() => {});
       await fetchStock();
     } catch {
@@ -493,9 +502,12 @@ export default function Game() {
                     <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-orange-400 flex items-center justify-center text-white font-bold text-sm shrink-0">
                       {entry.number}
                     </div>
-                    <div className="flex items-center gap-1 text-slate-300 text-sm">
-                      <Phone className="w-3 h-3" />
-                      {entry.phone}
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-white text-sm font-medium truncate">{entry.name}</span>
+                      <div className="flex items-center gap-1 text-slate-400 text-xs">
+                        <Phone className="w-3 h-3" />
+                        {entry.phone}
+                      </div>
                     </div>
                     <CheckCircle className="w-4 h-4 text-green-400 ml-auto shrink-0" />
                   </div>
@@ -550,12 +562,22 @@ export default function Game() {
             </p>
 
             <input
+              type="text"
+              placeholder="Customer name"
+              value={customerName}
+              onChange={(e) => { setCustomerName(e.target.value); setNameError(''); }}
+              onKeyDown={(e) => e.key === 'Enter' && confirmBuy()}
+              autoFocus
+              className="w-full px-4 py-3 border-2 border-slate-200 focus:border-indigo-500 rounded-xl outline-none text-slate-800 text-base mb-2"
+            />
+            {nameError && <p className="text-red-500 text-xs mb-2">{nameError}</p>}
+
+            <input
               type="tel"
               placeholder="e.g. 0912345678"
               value={phoneNumber}
               onChange={(e) => { setPhoneNumber(e.target.value); setPhoneError(''); }}
               onKeyDown={(e) => e.key === 'Enter' && confirmBuy()}
-              autoFocus
               className="w-full px-4 py-3 border-2 border-slate-200 focus:border-indigo-500 rounded-xl outline-none text-slate-800 text-base"
             />
             {phoneError && <p className="text-red-500 text-xs mt-1">{phoneError}</p>}
