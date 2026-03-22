@@ -154,6 +154,26 @@ export const initDatabase = async () => {
       ALTER TABLE cartela_purchases ADD COLUMN IF NOT EXISTS customer_name VARCHAR(100);
     `);
 
+    // Ensure payment_addresses table exists (migration for existing DBs)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS payment_addresses (
+        id SERIAL PRIMARY KEY,
+        label VARCHAR(100) NOT NULL,
+        address VARCHAR(255) NOT NULL,
+        type VARCHAR(50) DEFAULT 'bank',
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // Ensure system_settings table exists (migration for existing DBs)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key VARCHAR(100) PRIMARY KEY,
+        value TEXT,
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
     // Ensure active round exists
     const roundCheck = await client.query(`SELECT id FROM rounds WHERE status = 'open' LIMIT 1`);
     if (roundCheck.rows.length === 0) {

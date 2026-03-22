@@ -561,26 +561,33 @@ export default function Game() {
               Cartela <span className="font-bold text-indigo-600">#{pendingNumber}</span> — <span className="font-semibold text-green-600">{gameConfig.cartelaPrice} Birr</span>
             </p>
 
-            <input
-              type="text"
-              placeholder="Customer name"
-              value={customerName}
-              onChange={(e) => { setCustomerName(e.target.value); setNameError(''); }}
-              onKeyDown={(e) => e.key === 'Enter' && confirmBuy()}
-              autoFocus
-              className="w-full px-4 py-3 border-2 border-slate-200 focus:border-indigo-500 rounded-xl outline-none text-slate-800 text-base mb-2"
-            />
-            {nameError && <p className="text-red-500 text-xs mb-2">{nameError}</p>}
-
-            <input
-              type="tel"
-              placeholder="e.g. 0912345678"
-              value={phoneNumber}
-              onChange={(e) => { setPhoneNumber(e.target.value); setPhoneError(''); }}
-              onKeyDown={(e) => e.key === 'Enter' && confirmBuy()}
-              className="w-full px-4 py-3 border-2 border-slate-200 focus:border-indigo-500 rounded-xl outline-none text-slate-800 text-base"
-            />
-            {phoneError && <p className="text-red-500 text-xs mt-1">{phoneError}</p>}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wide">Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Hayelu"
+                  value={customerName}
+                  onChange={(e) => { setCustomerName(e.target.value); setNameError(''); }}
+                  onKeyDown={(e) => e.key === 'Enter' && confirmBuy()}
+                  autoFocus
+                  className={`w-full px-4 py-3 border-2 rounded-xl outline-none text-slate-800 text-base ${nameError ? 'border-red-400' : 'border-slate-200 focus:border-indigo-500'}`}
+                />
+                {nameError && <p className="text-red-500 text-xs mt-1">{nameError}</p>}
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wide">Phone Number</label>
+                <input
+                  type="tel"
+                  placeholder="e.g. 0912345678"
+                  value={phoneNumber}
+                  onChange={(e) => { setPhoneNumber(e.target.value); setPhoneError(''); }}
+                  onKeyDown={(e) => e.key === 'Enter' && confirmBuy()}
+                  className={`w-full px-4 py-3 border-2 rounded-xl outline-none text-slate-800 text-base ${phoneError ? 'border-red-400' : 'border-slate-200 focus:border-indigo-500'}`}
+                />
+                {phoneError && <p className="text-red-500 text-xs mt-1">{phoneError}</p>}
+              </div>
+            </div>
 
             <div className="flex gap-3 mt-4">
               <button
