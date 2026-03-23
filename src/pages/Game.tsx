@@ -55,6 +55,10 @@ export default function Game() {
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
 
+  // End game
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const [isEndingGame, setIsEndingGame] = useState(false);
+
   const WINNER_LABELS = ['1st Place', '2nd Place', '3rd Place'];
   const WINNER_COLORS = [
     'from-amber-400 via-yellow-400 to-orange-400',
@@ -164,6 +168,24 @@ export default function Game() {
     } catch {}
     setGameConfig({ ...setupForm });
     await fetchStock();
+  };
+
+  const handleEndGame = async () => {
+    setIsEndingGame(true);
+    try {
+      await fetch(`${API_URL}/api/admin/cartelas/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ total_cartelas: GAME_TOTAL }),
+      });
+    } catch {}
+    setGameConfig(null);
+    setDrawnNumbers([]);
+    setSoldEntries([]);
+    setSetupForm({ cartelaPrice: '30', prize1: '', prize2: '', prize3: '', totalCartelas: '20' });
+    setStock(null);
+    setConfirmEnd(false);
+    setIsEndingGame(false);
   };
 
   const openEditModal = () => {
@@ -522,11 +544,36 @@ export default function Game() {
               )}
             </div>
           ) : (
-            <div className="rounded-xl p-4 text-center border bg-indigo-500/10 border-indigo-400/20">
-              <div className="flex items-center justify-center gap-2 text-indigo-300 text-sm">
-                <Clock className="w-4 h-4 animate-pulse" />
-                Draw starts when all {GAME_TOTAL} cartelas are registered
+            <div className="space-y-2">
+              <div className="rounded-xl p-4 text-center border bg-indigo-500/10 border-indigo-400/20">
+                <div className="flex items-center justify-center gap-2 text-indigo-300 text-sm">
+                  <Clock className="w-4 h-4 animate-pulse" />
+                  Draw starts when all {GAME_TOTAL} cartelas are registered
+                </div>
               </div>
+              {!confirmEnd ? (
+                <button
+                  onClick={() => setConfirmEnd(true)}
+                  className="w-full py-2.5 rounded-xl border border-red-400/40 bg-red-500/10 text-red-300 hover:bg-red-500/20 font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
+                >
+                  <X size={15} /> End Current Game
+                </button>
+              ) : (
+                <div className="rounded-xl border border-red-400/50 bg-red-500/10 p-4 space-y-3">
+                  <p className="text-red-300 text-sm text-center font-semibold">End this game? All unsold cartelas will be cleared.</p>
+                  <div className="flex gap-2">
+                    <button onClick={() => setConfirmEnd(false)}
+                      className="flex-1 py-2 rounded-xl border border-white/20 text-white/60 text-sm font-semibold hover:bg-white/10">
+                      Cancel
+                    </button>
+                    <button onClick={handleEndGame} disabled={isEndingGame}
+                      className="flex-1 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-60">
+                      {isEndingGame ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <X size={14} />}
+                      {isEndingGame ? 'Ending...' : 'Yes, End Game'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
