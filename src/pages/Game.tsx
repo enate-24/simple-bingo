@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Trophy, Phone, X, CheckCircle, Clock, Sparkles, DollarSign, ArrowRight, Award, Star } from 'lucide-react';
+import { Trophy, Phone, X, CheckCircle, Clock, Sparkles, DollarSign, ArrowRight, Award, Star, Pencil, Save } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 const TOTAL = 20;
@@ -48,6 +48,12 @@ export default function Game() {
   // Draw
   const [drawnNumbers, setDrawnNumbers] = useState<number[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
+
+  // Edit config modal
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState<GameConfig>({ cartelaPrice: '', prize1: '', prize2: '', prize3: '', totalCartelas: '' });
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
 
   const WINNER_LABELS = ['1st Place', '2nd Place', '3rd Place'];
   const WINNER_COLORS = [
@@ -158,6 +164,40 @@ export default function Game() {
     } catch {}
     setGameConfig({ ...setupForm });
     await fetchStock();
+  };
+
+  const openEditModal = () => {
+    if (!gameConfig) return;
+    setEditForm({ ...gameConfig });
+    setEditError('');
+    setEditOpen(true);
+  };
+
+  const saveEditConfig = async () => {
+    if (!editForm.cartelaPrice || !editForm.prize1 || !editForm.prize2 || !editForm.prize3) {
+      setEditError('All fields are required');
+      return;
+    }
+    setEditSaving(true);
+    setEditError('');
+    try {
+      const res = await fetch(`${API_URL}/api/admin/rounds/config`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          cartela_price: editForm.cartelaPrice,
+          prize_1: editForm.prize1,
+          prize_2: editForm.prize2,
+          prize_3: editForm.prize3,
+        }),
+      });
+      if (!res.ok) { const d = await res.json(); setEditError(d.error || 'Failed'); setEditSaving(false); return; }
+      setGameConfig(prev => prev ? { ...prev, ...editForm } : prev);
+      setEditOpen(false);
+    } catch {
+      setEditError('Network error');
+    }
+    setEditSaving(false);
   };
 
   const handleNumberClick = (num: number) => {
@@ -319,7 +359,14 @@ export default function Game() {
           </header>
 
           {/* Prize summary bar */}
-          <div className="bg-white/10 border border-white/10 rounded-2xl px-4 py-3 grid grid-cols-4 gap-2 text-center">
+          <div className="bg-white/10 border border-white/10 rounded-2xl px-4 py-3 grid grid-cols-4 gap-2 text-center relative">
+            <button
+              onClick={openEditModal}
+              className="absolute top-2 right-2 p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors"
+              title="Edit game settings"
+            >
+              <Pencil size={13} />
+            </button>
             <div>
               <p className="text-indigo-300 text-xs">Price</p>
               <p className="text-white font-bold text-sm">{gameConfig.cartelaPrice} Br</p>
@@ -597,6 +644,62 @@ export default function Game() {
                   : <Sparkles size={16} />
                 }
                 {isBuying ? 'Registering...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Settings Modal */}
+      {editOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <div className="bg-indigo-100 p-2 rounded-xl">
+                  <Pencil className="w-4 h-4 text-indigo-600" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-800">Edit Game Settings</h3>
+              </div>
+              <button onClick={() => setEditOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Cartela Price (Birr)</label>
+                <input type="number" min="1" value={editForm.cartelaPrice}
+                  onChange={e => setEditForm(f => ({ ...f, cartelaPrice: e.target.value }))}
+                  className="w-full px-3 py-2.5 border-2 border-slate-200 focus:border-indigo-500 rounded-xl outline-none text-sm text-slate-800"
+                />
+              </div>
+              {([
+                { key: 'prize1', label: '🥇 1st Place Prize (Birr)' },
+                { key: 'prize2', label: '🥈 2nd Place Prize (Birr)' },
+                { key: 'prize3', label: '🥉 3rd Place Prize (Birr)' },
+              ] as const).map(({ key, label }) => (
+                <div key={key}>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">{label}</label>
+                  <input type="number" min="1" value={editForm[key]}
+                    onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))}
+                    className="w-full px-3 py-2.5 border-2 border-slate-200 focus:border-indigo-500 rounded-xl outline-none text-sm text-slate-800"
+                  />
+                </div>
+              ))}
+            </div>
+
+            {editError && <p className="text-red-500 text-xs mt-2">{editError}</p>}
+
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => setEditOpen(false)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50">
+                Cancel
+              </button>
+              <button onClick={saveEditConfig} disabled={editSaving}
+                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-60">
+                {editSaving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Save size={14} />}
+                {editSaving ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>

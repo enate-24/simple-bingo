@@ -665,6 +665,27 @@ app.post('/api/admin/settings', authMiddleware, async (req: AuthRequest, res) =>
   } catch { res.status(500).json({ error: 'Failed to save settings' }); }
 });
 
+// Update current open round config (price / prizes) mid-game
+app.patch('/api/admin/rounds/config', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { cartela_price, prize_1, prize_2, prize_3 } = req.body;
+    const result = await pool.query(
+      `UPDATE rounds SET
+        cartela_price = COALESCE($1, cartela_price),
+        prize_1 = COALESCE($2, prize_1),
+        prize_2 = COALESCE($3, prize_2),
+        prize_3 = COALESCE($4, prize_3)
+       WHERE status = 'open'
+       RETURNING cartela_price, prize_1, prize_2, prize_3`,
+      [cartela_price || null, prize_1 || null, prize_2 || null, prize_3 || null]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'No active round' });
+    res.json({ success: true, ...result.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to update round config' });
+  }
+});
+
 // Payment address routes
 app.get('/api/admin/payment-addresses', authMiddleware, async (req: AuthRequest, res) => {
   try {

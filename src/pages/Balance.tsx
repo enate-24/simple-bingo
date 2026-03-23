@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Wallet, TrendingUp, TrendingDown, Clock, ArrowLeft } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, Clock, Copy, CheckCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
@@ -12,9 +12,18 @@ interface Transaction {
   created_at: string;
 }
 
+interface PaymentAddress {
+  id: number;
+  label: string;
+  address: string;
+  type: string;
+}
+
 export default function Balance() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [paymentAddresses, setPaymentAddresses] = useState<PaymentAddress[]>([]);
   const [loading, setLoading] = useState(true);
+  const [copiedId, setCopiedId] = useState<number | null>(null);
   const { user, token } = useAuth();
   const navigate = useNavigate();
 
@@ -22,7 +31,28 @@ export default function Balance() {
 
   useEffect(() => {
     fetchTransactions();
+    fetchPaymentAddresses();
   }, []);
+
+  const fetchPaymentAddresses = async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/admin/payment-addresses`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setPaymentAddresses(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch payment addresses', error);
+    }
+  };
+
+  const copyToClipboard = (text: string, id: number) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
   const fetchTransactions = async () => {
     try {
@@ -87,6 +117,36 @@ export default function Balance() {
             <p className="text-3xl sm:text-4xl font-bold">${totalDebits.toFixed(2)}</p>
           </div>
         </div>
+
+        {/* Deposit Instructions */}
+        {paymentAddresses.length > 0 && (
+          <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl overflow-hidden">
+            <div className="bg-gradient-to-r from-green-600 to-emerald-600 px-4 sm:px-6 py-3 sm:py-4">
+              <h3 className="text-base sm:text-xl font-bold text-white flex items-center gap-2">
+                <Wallet className="w-4 h-4 sm:w-5 sm:h-5" />
+                Deposit — Send Payment To
+              </h3>
+            </div>
+            <div className="p-4 sm:p-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {paymentAddresses.map((pa) => (
+                <div key={pa.id} className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">{pa.type} — {pa.label}</p>
+                    <p className="text-sm sm:text-base font-mono font-semibold text-slate-800 truncate">{pa.address}</p>
+                  </div>
+                  <button
+                    onClick={() => copyToClipboard(pa.address, pa.id)}
+                    className="shrink-0 p-2 rounded-lg hover:bg-slate-200 transition-colors text-slate-500 hover:text-slate-800"
+                    title="Copy address"
+                  >
+                    {copiedId === pa.id ? <CheckCheck className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <p className="px-4 sm:px-6 pb-4 text-xs text-slate-400">After sending, contact the admin with your receipt to get your balance credited.</p>
+          </div>
+        )}
 
         {/* Transactions Table */}
         <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl overflow-hidden">
