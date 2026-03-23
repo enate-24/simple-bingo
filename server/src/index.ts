@@ -182,110 +182,80 @@ app.post('/api/game/start', authMiddleware, async (req: AuthRequest, res) => {
 
     await client.query('BEGIN');
 
-    // Check user balance and role
-    const userResult = await client.query(
-      'SELECT balance, is_active, role FROM users WHERE id = $1 FOR UPDATE',
-      [req.user!.id]
-    );
-    const user = userResult.rows[0];
-    const gameCost = 30.00;
-
-    if (user.role === 'admin') {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ error: 'Admins cannot play the lottery' });
-    }
-    if (!user.is_active) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ error: 'Account is deactivated' });
-    }
-    if (parseFloat(user.balance) < gameCost) {
-      await client.query('ROLLBACK');
-      return res.status(402).json({ error: 'Insufficient balance' });
-    }
-
     // Check cartela availability
     const stockResult = await client.query(
       'SELECT total_cartelas, sold_cartelas FROM cartela_stock WHERE id = 1 FOR UPDATE'
     );
     const stock = stockResult.rows[0];
-    const remaining = stock.total_cartelas - stock.sold_cartelas;
-    if (remaining <= 0) {
+    if (stock.total_cartelas - stock.sold_cartelas <= 0) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'No cartelas remaining for this game. Wait for the next round.' });
+      return res.status(400).json({ error: 'No cartelas remaining for this game.' });
     }
 
-    // Deduct 10 birr for the game
-    await client.query(
-      'UPDATE users SET balance = balance - $1, updated_at = NOW() WHERE id = $2',
-      [gameCost, req.user!.id]
+    // Check cartela not already taken
+    const dupCheck = await client.query(
+      `SELECT 1 FROM cartela_purchases cp
+       JOIN rounds r ON cp.round_id = r.id
+       WHERE r.status = 'open' AND cp.cartela_number = $1 LIMIT 1`,
+      [selected_numbers[0]]
     );
-
-    // Get the next game number for this user
-    const gameNumberResult = await client.query(
-      'SELECT COALESCE(MAX(game_number), 0) + 1 as next_number FROM games WHERE user_id = $1',
-      [req.user!.id]
-    );
-    const gameNumber = gameNumberResult.rows[0].next_number;
-
-    // Create new game
-    const result = await client.query(
-      'INSERT INTO games (user_id, game_number, selected_numbers, status) VALUES ($1, $2, $3, $4) RETURNING *',
-      [req.user!.id, gameNumber, selected_numbers, 'in_progress']
-    );
-
-    await client.query(
-      'INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)',
-      [req.user!.id, gameCost, 'debit', `Lottery game #${gameNumber}`]
-    );
-
-    // Save cartela purchase to current open round
-    const roundResult = await client.query(`SELECT id FROM rounds WHERE status = 'open' ORDER BY started_at DESC LIMIT 1`);
-    if (roundResult.rows.length > 0) {
-      const roundId = roundResult.rows[0].id;
-      await client.query(
-        'INSERT INTO cartela_purchases (round_id, cartela_number, customer_phone, customer_name) VALUES ($1, $2, $3, $4)',
-        [roundId, selected_numbers[0], phone_number || 'N/A', customer_name || null]
-      );
-      // Save game config to round if not already set
-      await client.query(
-        `UPDATE rounds SET
-          cartela_price = COALESCE(cartela_price, $1),
-          prize_1 = COALESCE(prize_1, $2),
-          prize_2 = COALESCE(prize_2, $3),
-          prize_3 = COALESCE(prize_3, $4)
-         WHERE id = $5`,
-        [cartela_price || null, prize1 || null, prize2 || null, prize3 || null, roundId]
-      );
+    if (dupCheck.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Cartela already taken' });
     }
+
+    // Get open round
+    const roundResult = await client.query(
+      `SELECT id FROM rounds WHERE status = 'open' ORDER BY started_at DESC LIMIT 1`
+    );
+    if (roundResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'No active round' });
+    }
+    const roundId = roundResult.rows[0].id;
+
+    // Insert purchase + update stock + update round config in parallel-ish
+    await client.query(
+      'INSERT INTO cartela_purchases (round_id, cartela_number, customer_phone, customer_name) VALUES ($1, $2, $3, $4)',
+      [roundId, selected_numbers[0], phone_number || 'N/A', customer_name || null]
+    );
+
+    await client.query(
+      `UPDATE rounds SET
+        cartela_price = COALESCE(cartela_price, $1),
+        prize_1 = COALESCE(prize_1, $2),
+        prize_2 = COALESCE(prize_2, $3),
+        prize_3 = COALESCE(prize_3, $4)
+       WHERE id = $5`,
+      [cartela_price || null, prize1 || null, prize2 || null, prize3 || null, roundId]
+    );
+
+    await client.query(
+      'UPDATE cartela_stock SET sold_cartelas = sold_cartelas + 1, updated_at = NOW() WHERE id = 1'
+    );
 
     await client.query('COMMIT');
 
-    // Increment sold cartelas and notify Telegram (fire-and-forget)
-    pool.query(
-      'UPDATE cartela_stock SET sold_cartelas = sold_cartelas + 1, updated_at = NOW() WHERE id = 1 RETURNING total_cartelas, sold_cartelas'
-    ).then(async (updatedStock) => {
-      stockCache = null; // invalidate cache
-      const s = updatedStock.rows[0];
-      const remainingAfter = s.total_cartelas - s.sold_cartelas;
-      const price = cartela_price ? `${cartela_price}` : '30';
+    stockCache = null;
 
-      // Immediate purchase notification
-      const purchaseMsg = await buildCartelaListMessage({ price, prize1: prize1 || 'N/A', prize2: prize2 || 'N/A', prize3: prize3 || 'N/A' });
-      sendTelegramMessage(purchaseMsg).catch(console.error);
+    // Fire-and-forget Telegram
+    buildCartelaListMessage({ price: cartela_price || '?', prize1: prize1 || 'N/A', prize2: prize2 || 'N/A', prize3: prize3 || 'N/A' })
+      .then(msg => sendTelegramMessage(msg).catch(console.error))
+      .catch(console.error);
 
-      // Start/restart 10s broadcast if game is still open
-      if (remainingAfter > 0) {
-        startBroadcast({ price, prize1: prize1 || 'N/A', prize2: prize2 || 'N/A', prize3: prize3 || 'N/A' });
-      } else {
-        stopBroadcast();
-      }
-    }).catch((e) => console.error('Post-game notification error:', e));
+    // Restart broadcast
+    const remaining = stock.total_cartelas - stock.sold_cartelas - 1;
+    if (remaining > 0) {
+      startBroadcast({ price: cartela_price || '?', prize1: prize1 || 'N/A', prize2: prize2 || 'N/A', prize3: prize3 || 'N/A' });
+    } else {
+      stopBroadcast();
+    }
 
-    res.json(result.rows[0]);
+    res.json({ success: true, cartela_number: selected_numbers[0] });
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Start game error:', error);
-    res.status(500).json({ error: 'Failed to start game' });
+    res.status(500).json({ error: 'Failed to register cartela' });
   } finally {
     client.release();
   }
@@ -809,8 +779,10 @@ app.get('/api/cartelas/stock', async (req, res) => {
     const stock = stockResult.rows[0];
 
     const soldResult = await pool.query(
-      `SELECT DISTINCT unnest(selected_numbers) as num FROM games
-       WHERE created_at >= (SELECT round_started_at FROM cartela_stock WHERE id = 1)`
+      `SELECT cp.cartela_number as num
+       FROM cartela_purchases cp
+       JOIN rounds r ON cp.round_id = r.id
+       WHERE r.status = 'open'`
     );
     const soldNumbers = soldResult.rows.map((r: any) => r.num);
 
