@@ -752,8 +752,8 @@ async function buildCartelaListMessage(config: typeof broadcastConfig): Promise<
 }
 
 function startBroadcast(config: typeof broadcastConfig) {
-  stopBroadcast();
   broadcastConfig = config;
+  if (broadcastInterval) return; // already running, don't reset the timer
   broadcastInterval = setInterval(async () => {
     try {
       const s = await pool.query('SELECT total_cartelas, sold_cartelas FROM cartela_stock WHERE id = 1');
