@@ -105,20 +105,12 @@ export default function Game() {
   const GAME_TOTAL = gameConfig ? Number(gameConfig.totalCartelas) : TOTAL;
   const allSold = stock ? stock.remaining === 0 : false;
 
-  const playShuffleSound = (): Promise<void> =>
-    new Promise(resolve => {
-      const audio = new Audio('/shuffle.mp3');
-      audio.play().catch(() => {});
-      setTimeout(() => { audio.pause(); audio.currentTime = 0; resolve(); }, 4000);
-    });
-
   const handleDraw = async () => {
     if (isDrawing || drawnNumbers.length >= 3 || !stock) return;
     const available = (stock.sold_numbers ?? []).filter(n => !drawnNumbers.includes(n));
     if (available.length === 0) return;
     const drawn = available[Math.floor(Math.random() * available.length)];
     setIsDrawing(true);
-    await playShuffleSound();
     const newDrawn = [...drawnNumbers, drawn];
     setDrawnNumbers(newDrawn);
     try {
@@ -211,7 +203,6 @@ export default function Game() {
       setPendingNumber(null);
       setPhoneNumber('');
       setCustomerName('');
-      new Audio('/start.wav').play().catch(() => {});
       await fetchStock();
     } catch {
       setError('Failed to register cartela');

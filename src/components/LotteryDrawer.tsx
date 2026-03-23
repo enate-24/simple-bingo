@@ -22,23 +22,10 @@ function LotteryDrawer({ selectedCount, drawnNumbers, onDraw, onReveal, canDraw 
   const [isDrawing, setIsDrawing] = useState(false);
   const maxWinners = 3;
 
-  const playShuffleSound = (): Promise<void> => {
-    return new Promise((resolve) => {
-      const audio = new Audio('/shuffle.mp3');
-      audio.play().catch(() => {});
-      setTimeout(() => {
-        audio.pause();
-        audio.currentTime = 0;
-        resolve();
-      }, 4000);
-    });
-  };
-
   const handleDraw = async () => {
     if (isDrawing || !canDraw || drawnNumbers.length >= maxWinners) return;
     setIsDrawing(true);
     const drawnNumber = onDraw();
-    await playShuffleSound();
     if (drawnNumber !== null && drawnNumber !== undefined) {
       onReveal(drawnNumber);
     }
