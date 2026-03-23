@@ -763,12 +763,23 @@ async function buildCartelaListMessage(config: typeof broadcastConfig): Promise<
     }
   }
 
+  // Fetch payment addresses
+  let paymentSection = '';
+  try {
+    const paResult = await pool.query('SELECT label, address, type FROM payment_addresses ORDER BY created_at ASC');
+    if (paResult.rows.length > 0) {
+      const paLines = paResult.rows.map((r: any) => `💳 <b>${r.label}</b> (${r.type}): <code>${r.address}</code>`);
+      paymentSection = `\n\n💰 <b>Payment Details</b>\n` + paLines.join('\n');
+    }
+  } catch {}
+
   return (
     `📊 <b>Game Status</b>\n` +
     `💰 <b>Price:</b> ${config?.price || 'N/A'} Birr\n` +
     `🥇 ${config?.prize1 || 'N/A'} Birr  🥈 ${config?.prize2 || 'N/A'} Birr  🥉 ${config?.prize3 || 'N/A'} Birr\n` +
     `📦 <b>Remaining:</b> ${remaining} / ${total_cartelas}\n\n` +
-    lines.join('\n')
+    lines.join('\n') +
+    paymentSection
   );
 }
 
