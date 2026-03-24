@@ -65,13 +65,15 @@ export default function AdminPanel() {
 
   const fetchCartelaStock = useCallback(async () => {
     if (document.visibilityState === 'hidden') return;
-    const res = await fetch(`${API_URL}/api/cartelas/stock`);
+    const res = await fetch(`${API_URL}/api/cartelas/stock`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
     if (res.ok) {
       const data = await res.json();
       setCartelaStock(data);
       setSoldNumbers(data.sold_numbers ?? []);
     }
-  }, [API_URL]);
+  }, [API_URL, token]);
 
   const fetchRounds = useCallback(async () => {
     const res = await fetch(`${API_URL}/api/admin/rounds`, {

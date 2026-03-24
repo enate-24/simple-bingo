@@ -70,16 +70,20 @@ export default function Game() {
   const fetchStock = useCallback(async () => {
     if (document.visibilityState === 'hidden') return;
     try {
-      const res = await fetch(`${API_URL}/api/cartelas/stock`);
+      const res = await fetch(`${API_URL}/api/cartelas/stock`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       if (res.ok) setStock(await res.json());
     } catch {}
-  }, [API_URL]);
+  }, [API_URL, token]);
 
   useEffect(() => {
     // Check if a game is already open and resume it
     const checkStatus = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/game/status`);
+        const res = await fetch(`${API_URL}/api/game/status`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
         if (res.ok) {
           const data = await res.json();
           if (data.open && data.configured) {
