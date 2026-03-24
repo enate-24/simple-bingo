@@ -194,6 +194,24 @@ export const initDatabase = async () => {
       );
     `);
 
+    // Add user_id to system_settings for per-operator settings
+    await client.query(`
+      ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+    `);
+    // Drop old single-key primary key and add composite unique constraint
+    await client.query(`
+      ALTER TABLE system_settings DROP CONSTRAINT IF EXISTS system_settings_pkey;
+    `);
+    await client.query(`
+      ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS id SERIAL;
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_system_settings_key_user ON system_settings(key, user_id);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_system_settings_user_id ON system_settings(user_id);
+    `);
+
     // Ensure active round exists
     const roundCheck = await client.query(`SELECT id, total_cartelas FROM rounds WHERE status = 'open' LIMIT 1`);
     if (roundCheck.rows.length === 0) {

@@ -243,13 +243,13 @@ app.post('/api/game/start', authMiddleware, async (req: AuthRequest, res) => {
     stockCache = null;
 
     // Fire-and-forget Telegram
-    buildCartelaListMessage({ price: cartela_price || '?', prize1: prize1 || 'N/A', prize2: prize2 || 'N/A', prize3: prize3 || 'N/A' })
-      .then(msg => sendTelegramMessage(msg).catch(console.error))
+    buildCartelaListMessage({ price: cartela_price || '?', prize1: prize1 || 'N/A', prize2: prize2 || 'N/A', prize3: prize3 || 'N/A' }, operatorId)
+      .then(msg => sendTelegramMessage(msg, operatorId).catch(console.error))
       .catch(console.error);
 
     const remaining = round.total_cartelas - sold - 1;
     if (remaining > 0) {
-      startBroadcast({ price: cartela_price || '?', prize1: prize1 || 'N/A', prize2: prize2 || 'N/A', prize3: prize3 || 'N/A' });
+      startBroadcast({ price: cartela_price || '?', prize1: prize1 || 'N/A', prize2: prize2 || 'N/A', prize3: prize3 || 'N/A' }, operatorId);
     } else {
       stopBroadcast();
     }
@@ -605,7 +605,7 @@ app.post('/api/admin/rounds/winners', authMiddleware, async (req: AuthRequest, r
         `🥉 Cartela #${w3} — ${c3?.label} — ${prizes[2] ? prizes[2] + ' Birr' : 'N/A'}`;
     }
 
-    await sendTelegramMessage(msg);
+    await sendTelegramMessage(msg, req.user!.id);
 
     res.json({ success: true, roundId, isComplete });
   } catch (error) {
@@ -632,6 +632,24 @@ app.get('/api/admin/rounds/preset-status', authMiddleware, async (req: AuthReque
     res.json({ revealed, revealedWinners });
   } catch {
     res.status(500).json({ error: 'Failed to check preset status' });
+  }
+});
+
+// Get round history for a specific user (admin only)
+app.get('/api/admin/users/:id/rounds', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT r.*,
+        (SELECT COUNT(*) FROM cartela_purchases WHERE round_id = r.id) as total_purchases,
+        ROW_NUMBER() OVER (ORDER BY r.started_at ASC) as game_number
+       FROM rounds r
+       WHERE r.operator_id = $1
+       ORDER BY r.started_at DESC LIMIT 100`,
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch user rounds' });
   }
 });
 
@@ -714,7 +732,7 @@ app.post('/api/admin/rounds/reveal-winner', authMiddleware, async (req: AuthRequ
         `🥈 Cartela #${w[1]} — ${prizes[1] ? prizes[1] + ' Birr' : 'N/A'}\n` +
         `🥉 Cartela #${w[2]} — ${prizes[2] ? prizes[2] + ' Birr' : 'N/A'}`;
     }
-    sendTelegramMessage(msg).catch(console.error);
+    sendTelegramMessage(msg, req.user!.id).catch(console.error);
 
     res.json({ place, cartela_number: cartela, customer_label: label, prize: prizes[revealed], is_complete: isComplete });
   } catch (error) {
@@ -739,7 +757,7 @@ app.get('/api/admin/rounds/:id/purchases', authMiddleware, adminMiddleware, asyn
 // System settings routes
 app.get('/api/admin/settings', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const result = await pool.query('SELECT key, value FROM system_settings');
+    const result = await pool.query('SELECT key, value FROM system_settings WHERE user_id = $1', [req.user!.id]);
     const map: Record<string, string> = {};
     for (const row of result.rows) map[row.key] = row.value;
     res.json(map);
@@ -749,21 +767,23 @@ app.get('/api/admin/settings', authMiddleware, async (req: AuthRequest, res) => 
 app.post('/api/admin/settings', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const settings: Record<string, string> = req.body;
+    const userId = req.user!.id;
 
-    // Check if telegram was configured before
+    // Check if telegram was configured before for this user
     const existing = await pool.query(
-      `SELECT value FROM system_settings WHERE key = 'telegram_bot_token'`
+      `SELECT value FROM system_settings WHERE key = 'telegram_bot_token' AND user_id = $1`,
+      [userId]
     );
     const isFirstTime = existing.rows.length === 0 || !existing.rows[0].value;
 
     for (const [key, value] of Object.entries(settings)) {
       await pool.query(
-        `INSERT INTO system_settings (key, value, updated_at) VALUES ($1, $2, NOW())
-         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
-        [key, value]
+        `INSERT INTO system_settings (key, value, user_id, updated_at) VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (key, user_id) DO UPDATE SET value = $2, updated_at = NOW()`,
+        [key, value, userId]
       );
     }
-    invalidateSettingsCache();
+    invalidateSettingsCache(userId);
 
     // Send self-deleting welcome message on first-time Telegram config
     const newToken = settings['telegram_bot_token'];
@@ -825,7 +845,7 @@ app.patch('/api/admin/rounds/config', authMiddleware, async (req: AuthRequest, r
 // Payment address routes
 app.get('/api/admin/payment-addresses', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const result = await pool.query('SELECT * FROM payment_addresses ORDER BY created_at DESC');
+    const result = await pool.query('SELECT * FROM payment_addresses WHERE user_id = $1 ORDER BY created_at DESC', [req.user!.id]);
     res.json(result.rows);
   } catch { res.status(500).json({ error: 'Failed to fetch' }); }
 });
@@ -834,8 +854,8 @@ app.post('/api/admin/payment-addresses', authMiddleware, async (req: AuthRequest
   try {
     const { label, address, type } = req.body;
     const result = await pool.query(
-      'INSERT INTO payment_addresses (label, address, type) VALUES ($1, $2, $3) RETURNING *',
-      [label, address, type || 'bank']
+      'INSERT INTO payment_addresses (label, address, type, user_id) VALUES ($1, $2, $3, $4) RETURNING *',
+      [label, address, type || 'bank', req.user!.id]
     );
     res.json(result.rows[0]);
   } catch { res.status(500).json({ error: 'Failed to save' }); }
@@ -843,7 +863,7 @@ app.post('/api/admin/payment-addresses', authMiddleware, async (req: AuthRequest
 
 app.delete('/api/admin/payment-addresses/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    await pool.query('DELETE FROM payment_addresses WHERE id = $1', [req.params.id]);
+    await pool.query('DELETE FROM payment_addresses WHERE id = $1 AND user_id = $2', [req.params.id, req.user!.id]);
     res.json({ success: true });
   } catch { res.status(500).json({ error: 'Failed to delete' }); }
 });
@@ -852,15 +872,17 @@ app.delete('/api/admin/payment-addresses/:id', authMiddleware, async (req: AuthR
 let stockCache: { data: any; ts: number } | null = null;
 const STOCK_CACHE_TTL = 1500;
 
-// Per-round broadcast interval
+// Per-operator broadcast interval
 let broadcastInterval: ReturnType<typeof setInterval> | null = null;
 let broadcastConfig: { price: string; prize1: string; prize2: string; prize3: string } | null = null;
+let broadcastOperatorId: number | null = null;
 
 function stopBroadcast() {
   if (broadcastInterval) {
     clearInterval(broadcastInterval);
     broadcastInterval = null;
   }
+  broadcastOperatorId = null;
 }
 
 // Pre-pick 3 random winners from all sold cartelas and store them (hidden until revealed)
@@ -893,26 +915,28 @@ function maskPhone(phone: string): string {
   return p.slice(0, 4) + '***' + p.slice(-3);
 }
 
-async function buildCartelaListMessage(config: typeof broadcastConfig): Promise<string> {
-  const s = await pool.query('SELECT total_cartelas, sold_cartelas FROM cartela_stock WHERE id = 1');
-  const { total_cartelas, sold_cartelas } = s.rows[0];
-  const remaining = total_cartelas - sold_cartelas;
+async function buildCartelaListMessage(config: typeof broadcastConfig, operatorId: number): Promise<string> {
+  // Get open round for this operator
+  const roundResult = await pool.query(
+    `SELECT id, total_cartelas FROM rounds WHERE status = 'open' AND operator_id = $1 ORDER BY started_at DESC LIMIT 1`,
+    [operatorId]
+  );
+  if (roundResult.rows.length === 0) return '📊 No active round';
+  const round = roundResult.rows[0];
 
-  // Get all purchases for current open round
-  const purchasesResult = await pool.query(
-    `SELECT cp.cartela_number, cp.customer_phone, cp.customer_name
-     FROM cartela_purchases cp
-     JOIN rounds r ON cp.round_id = r.id
-     WHERE r.status = 'open'
-     ORDER BY cp.cartela_number ASC`
+  const soldResult = await pool.query(
+    `SELECT cartela_number, customer_phone, customer_name FROM cartela_purchases WHERE round_id = $1 ORDER BY cartela_number ASC`,
+    [round.id]
   );
   const purchaseMap: Record<number, { phone: string; name: string | null }> = {};
-  for (const row of purchasesResult.rows) {
+  for (const row of soldResult.rows) {
     purchaseMap[row.cartela_number] = { phone: row.customer_phone, name: row.customer_name };
   }
+  const sold = soldResult.rows.length;
+  const remaining = round.total_cartelas - sold;
 
   const lines: string[] = [];
-  for (let i = 1; i <= total_cartelas; i++) {
+  for (let i = 1; i <= round.total_cartelas; i++) {
     const entry = purchaseMap[i];
     if (entry) {
       const label = entry.name ? entry.name : maskPhone(entry.phone);
@@ -922,10 +946,13 @@ async function buildCartelaListMessage(config: typeof broadcastConfig): Promise<
     }
   }
 
-  // Fetch payment addresses
+  // Fetch payment addresses for this operator
   let paymentSection = '';
   try {
-    const paResult = await pool.query('SELECT label, address, type FROM payment_addresses ORDER BY created_at ASC');
+    const paResult = await pool.query(
+      'SELECT label, address, type FROM payment_addresses WHERE user_id = $1 ORDER BY created_at ASC',
+      [operatorId]
+    );
     if (paResult.rows.length > 0) {
       const paLines = paResult.rows.map((r: any) => `💳 <b>${r.label}</b> (${r.type}): <code>${r.address}</code>`);
       paymentSection = `\n\n💰 <b>Payment Details</b>\n` + paLines.join('\n');
@@ -936,22 +963,33 @@ async function buildCartelaListMessage(config: typeof broadcastConfig): Promise<
     `📊 <b>Game Status</b>\n` +
     `💰 <b>Price:</b> ${config?.price || 'N/A'} Birr\n` +
     `🥇 ${config?.prize1 || 'N/A'} Birr  🥈 ${config?.prize2 || 'N/A'} Birr  🥉 ${config?.prize3 || 'N/A'} Birr\n` +
-    `📦 <b>Remaining:</b> ${remaining} / ${total_cartelas}\n\n` +
+    `📦 <b>Remaining:</b> ${remaining} / ${round.total_cartelas}\n\n` +
     lines.join('\n') +
     paymentSection
   );
 }
 
-function startBroadcast(config: typeof broadcastConfig) {
+function startBroadcast(config: typeof broadcastConfig, operatorId: number) {
   broadcastConfig = config;
-  if (broadcastInterval) return; // already running, don't reset the timer
+  broadcastOperatorId = operatorId;
+  if (broadcastInterval) return;
   broadcastInterval = setInterval(async () => {
     try {
-      const s = await pool.query('SELECT total_cartelas, sold_cartelas FROM cartela_stock WHERE id = 1');
-      const remaining = s.rows[0].total_cartelas - s.rows[0].sold_cartelas;
+      if (!broadcastOperatorId) { stopBroadcast(); return; }
+      const roundResult = await pool.query(
+        `SELECT total_cartelas FROM rounds WHERE status = 'open' AND operator_id = $1 ORDER BY started_at DESC LIMIT 1`,
+        [broadcastOperatorId]
+      );
+      if (roundResult.rows.length === 0) { stopBroadcast(); return; }
+      const round = roundResult.rows[0];
+      const soldResult = await pool.query(
+        `SELECT COUNT(*) as sold FROM cartela_purchases WHERE round_id = (SELECT id FROM rounds WHERE status='open' AND operator_id=$1 ORDER BY started_at DESC LIMIT 1)`,
+        [broadcastOperatorId]
+      );
+      const remaining = round.total_cartelas - parseInt(soldResult.rows[0].sold);
       if (remaining <= 0) { stopBroadcast(); return; }
-      const msg = await buildCartelaListMessage(broadcastConfig);
-      await sendTelegramMessage(msg);
+      const msg = await buildCartelaListMessage(broadcastConfig, broadcastOperatorId);
+      await sendTelegramMessage(msg, broadcastOperatorId);
     } catch (e) {
       console.error('Broadcast error:', e);
     }
@@ -1070,7 +1108,8 @@ app.post('/api/admin/cartelas/reset', authMiddleware, async (req: AuthRequest, r
     stopBroadcast();
 
     await sendTelegramMessage(
-      `🔄 <b>New Round Started!</b>\n📦 <b>${stock.total_cartelas} cartelas</b> available. Good luck! 🍀`
+      `🔄 <b>New Round Started!</b>\n📦 <b>${stock.total_cartelas} cartelas</b> available. Good luck! 🍀`,
+      req.user!.id
     );
 
     res.json({ ...stock, remaining: stock.total_cartelas - stock.sold_cartelas });

@@ -1,37 +1,52 @@
 import { pool } from './db.js';
 
-// Cache settings for 30s to avoid DB hit on every message
-let settingsCache: Record<string, string> | null = null;
-let settingsCacheTs = 0;
+// Per-user settings cache: userId -> { map, ts }
+const userSettingsCache: Record<number, { map: Record<string, string>; ts: number }> = {};
 const SETTINGS_TTL = 30000;
 
-async function getSettings(): Promise<Record<string, string>> {
+async function getSettingsForUser(userId: number): Promise<Record<string, string>> {
   const now = Date.now();
-  if (settingsCache && now - settingsCacheTs < SETTINGS_TTL) return settingsCache;
+  const cached = userSettingsCache[userId];
+  if (cached && now - cached.ts < SETTINGS_TTL) return cached.map;
   try {
-    const result = await pool.query('SELECT key, value FROM system_settings');
+    const result = await pool.query(
+      'SELECT key, value FROM system_settings WHERE user_id = $1',
+      [userId]
+    );
     const map: Record<string, string> = {};
     for (const row of result.rows) map[row.key] = row.value;
-    settingsCache = map;
-    settingsCacheTs = now;
+    userSettingsCache[userId] = { map, ts: now };
     return map;
   } catch {
     return {};
   }
 }
 
-export function invalidateSettingsCache() {
-  settingsCache = null;
+export function invalidateSettingsCache(userId?: number) {
+  if (userId !== undefined) {
+    delete userSettingsCache[userId];
+  } else {
+    // Clear all
+    for (const key of Object.keys(userSettingsCache)) delete userSettingsCache[Number(key)];
+  }
 }
 
-export async function sendTelegramMessage(message: string): Promise<void> {
-  const settings = await getSettings();
+export async function sendTelegramMessage(message: string, userId?: number): Promise<void> {
+  let token: string | undefined;
+  let chatId: string | undefined;
+  let operatorName = '';
+  let customMessage = '';
 
-  // DB values take priority over .env
-  const token = settings['telegram_bot_token'] || process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = settings['telegram_group_chat_id'] || process.env.TELEGRAM_GROUP_CHAT_ID;
-  const operatorName = settings['operator_name'] || '';
-  const customMessage = settings['custom_message'] || '';
+  if (userId !== undefined) {
+    const settings = await getSettingsForUser(userId);
+    token = settings['telegram_bot_token'] || process.env.TELEGRAM_BOT_TOKEN;
+    chatId = settings['telegram_group_chat_id'] || process.env.TELEGRAM_GROUP_CHAT_ID;
+    operatorName = settings['operator_name'] || '';
+    customMessage = settings['custom_message'] || '';
+  } else {
+    token = process.env.TELEGRAM_BOT_TOKEN;
+    chatId = process.env.TELEGRAM_GROUP_CHAT_ID;
+  }
 
   console.log('[Telegram] token:', token ? token.slice(0, 10) + '...' : 'MISSING');
   console.log('[Telegram] chatId:', chatId || 'MISSING');
@@ -41,7 +56,6 @@ export async function sendTelegramMessage(message: string): Promise<void> {
     return;
   }
 
-  // Prepend operator name + custom message if set
   let fullMessage = '';
   if (operatorName) fullMessage += `👤 <b>${operatorName}</b>\n`;
   if (customMessage) fullMessage += `💬 ${customMessage}\n\n`;
