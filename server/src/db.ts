@@ -226,7 +226,8 @@ export const initDatabase = async () => {
       CREATE INDEX IF NOT EXISTS idx_payment_addresses_user_id ON payment_addresses(user_id);
     `);
 
-    // Ensure active round exists
+    // Clean up old global system_settings rows (no user_id) that could leak to new users
+    await client.query(`DELETE FROM system_settings WHERE user_id IS NULL;`);
     const roundCheck = await client.query(`SELECT id, total_cartelas FROM rounds WHERE status = 'open' LIMIT 1`);
     if (roundCheck.rows.length === 0) {
       const newRound = await client.query(`INSERT INTO rounds (total_cartelas) VALUES (20) RETURNING id`);

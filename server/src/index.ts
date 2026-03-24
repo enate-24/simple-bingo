@@ -783,15 +783,15 @@ app.post('/api/admin/settings', authMiddleware, async (req: AuthRequest, res) =>
 
     // Check if telegram was configured before for this user
     const existing = await pool.query(
-      `SELECT value FROM system_settings WHERE key = 'telegram_bot_token' AND user_id = $1`,
+      `SELECT value FROM system_settings WHERE key = 'telegram_bot_token' AND user_id = $1 AND value IS NOT NULL AND value != ''`,
       [userId]
     );
-    const isFirstTime = existing.rows.length === 0 || !existing.rows[0].value;
+    const isFirstTime = existing.rows.length === 0;
 
     for (const [key, value] of Object.entries(settings)) {
+      await pool.query(`DELETE FROM system_settings WHERE key = $1 AND user_id = $2`, [key, userId]);
       await pool.query(
-        `INSERT INTO system_settings (key, value, user_id, updated_at) VALUES ($1, $2, $3, NOW())
-         ON CONFLICT (key, user_id) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+        `INSERT INTO system_settings (key, value, user_id, updated_at) VALUES ($1, $2, $3, NOW())`,
         [key, value, userId]
       );
     }
