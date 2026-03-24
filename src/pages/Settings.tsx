@@ -40,16 +40,17 @@ export default function Settings() {
   const headers = { Authorization: `Bearer ${token}` };
 
   useEffect(() => {
-    fetch(`${API_URL}/api/admin/settings`, { headers })
+    if (!token) return;
+    fetch(`${API_URL}/api/admin/settings`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
-      .then(data => setTg(prev => ({ ...prev, ...data })))
+      .then(data => setTg({ telegram_bot_token: '', telegram_group_chat_id: '', operator_name: '', custom_message: '', ...data }))
       .catch(() => {});
 
-    fetch(`${API_URL}/api/admin/payment-addresses`, { headers })
+    fetch(`${API_URL}/api/admin/payment-addresses`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
-      .then(setAddresses)
+      .then(data => Array.isArray(data) ? setAddresses(data) : setAddresses([]))
       .catch(() => {});
-  }, []);
+  }, [token, API_URL]);
 
   const saveTgSettings = async (e: React.FormEvent) => {
     e.preventDefault();

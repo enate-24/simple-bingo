@@ -39,11 +39,12 @@ export async function sendTelegramMessage(message: string, userId?: number): Pro
 
   if (userId !== undefined) {
     const settings = await getSettingsForUser(userId);
-    token = settings['telegram_bot_token'] || process.env.TELEGRAM_BOT_TOKEN;
-    chatId = settings['telegram_group_chat_id'] || process.env.TELEGRAM_GROUP_CHAT_ID;
+    token = settings['telegram_bot_token'];
+    chatId = settings['telegram_group_chat_id'];
     operatorName = settings['operator_name'] || '';
     customMessage = settings['custom_message'] || '';
   } else {
+    // Only used for system-level calls with no user context
     token = process.env.TELEGRAM_BOT_TOKEN;
     chatId = process.env.TELEGRAM_GROUP_CHAT_ID;
   }
