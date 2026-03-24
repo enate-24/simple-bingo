@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Plus, DollarSign, Power, History, Pencil, Trash2, X, Trophy, ChevronRight } from 'lucide-react';
+import { Users, Plus, DollarSign, Power, History, Pencil, Trash2, X, Trophy } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 interface User {
@@ -374,37 +374,42 @@ export default function AdminPanel() {
                 <div className="divide-y divide-slate-100">
                   {userRounds.map(r => (
                     <div key={r.id} className="px-5 py-4 hover:bg-slate-50 transition-colors">
-                      <div className="flex items-center justify-between gap-3 mb-2">
+                      <div className="flex items-center justify-between gap-3 mb-3">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-bold text-indigo-600">#{r.game_number}</span>
+                          <span className="text-sm font-bold text-indigo-600">Game #{r.game_number}</span>
                           <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
                             r.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
                           }`}>{r.status}</span>
+                          <span className="text-xs text-slate-400">{r.total_purchases ?? 0}/{r.total_cartelas} cartelas</span>
                         </div>
-                        <span className="text-xs text-slate-400">
+                        <span className="text-xs text-slate-400 whitespace-nowrap">
                           {new Date(r.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                         </span>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="text-slate-500">
-                          Cartelas: <span className="font-semibold text-slate-700">{r.total_purchases ?? 0}/{r.total_cartelas}</span>
-                        </span>
-                        <ChevronRight size={12} className="text-slate-300" />
-                        {r.winner_1 ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-100 text-amber-800 font-bold">
-                            🥇 #{r.winner_1}{r.prize_1 ? ` · ${r.prize_1}Br` : ''}
-                          </span>
-                        ) : <span className="text-slate-300">🥇 —</span>}
-                        {r.winner_2 ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-100 text-slate-700 font-bold">
-                            🥈 #{r.winner_2}{r.prize_2 ? ` · ${r.prize_2}Br` : ''}
-                          </span>
-                        ) : <span className="text-slate-300">🥈 —</span>}
-                        {r.winner_3 ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-orange-100 text-orange-800 font-bold">
-                            🥉 #{r.winner_3}{r.prize_3 ? ` · ${r.prize_3}Br` : ''}
-                          </span>
-                        ) : <span className="text-slate-300">🥉 —</span>}
+
+                      {/* Winners */}
+                      <div className="flex items-center gap-3">
+                        {[
+                          { winner: r.winner_1, prize: r.prize_1, label: '1st', bg: 'bg-amber-400', ring: 'ring-amber-300' },
+                          { winner: r.winner_2, prize: r.prize_2, label: '2nd', bg: 'bg-slate-400', ring: 'ring-slate-300' },
+                          { winner: r.winner_3, prize: r.prize_3, label: '3rd', bg: 'bg-orange-500', ring: 'ring-orange-300' },
+                        ].map(({ winner, prize, label, bg, ring }) => (
+                          <div key={label} className="flex flex-col items-center gap-1">
+                            <span className="text-xs text-slate-400">{label}</span>
+                            {winner ? (
+                              <div className={`w-10 h-10 rounded-full ${bg} ring-2 ${ring} flex items-center justify-center shadow`}>
+                                <span className="text-white font-black text-sm">{winner}</span>
+                              </div>
+                            ) : (
+                              <div className="w-10 h-10 rounded-full border-2 border-dashed border-slate-200 flex items-center justify-center">
+                                <span className="text-slate-300 text-xs">—</span>
+                              </div>
+                            )}
+                            {prize && winner && (
+                              <span className="text-xs font-semibold text-slate-600">{prize}Br</span>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     </div>
                   ))}
