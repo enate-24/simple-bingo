@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Plus, DollarSign, Power, Package, RotateCcw, Sparkles, Trophy, Award, Star } from 'lucide-react';
+import { Users, Plus, DollarSign, Power, Package, RotateCcw, Sparkles, Trophy, Award, Star, History, Pencil, Trash2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 interface User {
@@ -18,6 +18,22 @@ interface CartelaStock {
   remaining: number;
 }
 
+interface Round {
+  id: number;
+  game_number: number;
+  operator_name: string;
+  total_cartelas: number;
+  total_purchases: number;
+  winner_1: number | null;
+  winner_2: number | null;
+  winner_3: number | null;
+  prize_1: string | null;
+  prize_2: string | null;
+  prize_3: string | null;
+  status: string;
+  started_at: string;
+}
+
 const WINNER_LABELS = ['1st Place', '2nd Place', '3rd Place'];
 const WINNER_COLORS = [
   'from-amber-400 via-yellow-400 to-orange-400',
@@ -34,6 +50,10 @@ export default function AdminPanel() {
   const [drawnNumbers, setDrawnNumbers] = useState<number[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
   const [soldNumbers, setSoldNumbers] = useState<number[]>([]);
+  const [rounds, setRounds] = useState<Round[]>([]);
+  const [editUser, setEditUser] = useState<User | null>(null);
+  const [editForm, setEditForm] = useState({ email: '', full_name: '', role: 'user', password: '' });
+  const [editSaving, setEditSaving] = useState(false);
 
   const { token } = useAuth();
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -53,17 +73,32 @@ export default function AdminPanel() {
     }
   }, [API_URL]);
 
+  const fetchRounds = useCallback(async () => {
+    const res = await fetch(`${API_URL}/api/admin/rounds`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.ok) setRounds(await res.json());
+  }, [API_URL, token]);
+
   useEffect(() => {
     fetchUsers();
     fetchCartelaStock();
-    const interval = setInterval(fetchCartelaStock, 5000);
-    const onVisibility = () => { if (document.visibilityState === 'visible') fetchCartelaStock(); };
+    fetchRounds();
+    const stockInterval = setInterval(fetchCartelaStock, 5000);
+    const roundsInterval = setInterval(fetchRounds, 10000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchCartelaStock();
+        fetchRounds();
+      }
+    };
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      clearInterval(interval);
+      clearInterval(stockInterval);
+      clearInterval(roundsInterval);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [fetchUsers, fetchCartelaStock]);
+  }, [fetchUsers, fetchCartelaStock, fetchRounds]);
 
   const createUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,6 +128,34 @@ export default function AdminPanel() {
       body: JSON.stringify({ is_active: !current })
     });
     if (res.ok) fetchUsers();
+  };
+
+  const deleteUser = async (userId: number, email: string) => {
+    if (!confirm(`Delete user "${email}"? This cannot be undone.`)) return;
+    const res = await fetch(`${API_URL}/api/admin/users/${userId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.ok) fetchUsers();
+  };
+
+  const openEdit = (user: User) => {
+    setEditUser(user);
+    setEditForm({ email: user.email, full_name: user.full_name || '', role: user.role, password: '' });
+  };
+
+  const saveEdit = async () => {
+    if (!editUser) return;
+    setEditSaving(true);
+    const body: any = { email: editForm.email, full_name: editForm.full_name, role: editForm.role };
+    if (editForm.password) body.password = editForm.password;
+    const res = await fetch(`${API_URL}/api/admin/users/${editUser.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body)
+    });
+    if (res.ok) { setEditUser(null); fetchUsers(); }
+    setEditSaving(false);
   };
 
   const resetCartelaStock = async () => {
@@ -168,6 +231,7 @@ export default function AdminPanel() {
                 <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm">
                   <option value="user">User</option>
+                  <option value="operator">Operator</option>
                   <option value="admin">Admin</option>
                 </select>
               </div>
@@ -302,7 +366,9 @@ export default function AdminPanel() {
                   <p className="text-xs text-slate-500">{user.full_name || '—'}</p>
                 </div>
                 <span className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-semibold ${
-                  user.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
+                  user.role === 'admin' ? 'bg-purple-100 text-purple-700'
+                  : user.role === 'operator' ? 'bg-orange-100 text-orange-700'
+                  : 'bg-blue-100 text-blue-700'
                 }`}>{user.role}</span>
               </div>
               <div className="flex items-center justify-between">
@@ -313,12 +379,19 @@ export default function AdminPanel() {
                   }`}>{user.is_active ? 'Active' : 'Inactive'}</span>
                 </div>
                 <div className="flex gap-2">
+                  <button onClick={() => openEdit(user)} className="bg-indigo-500 text-white p-1.5 rounded-lg hover:bg-indigo-600" title="Edit">
+                    <Pencil size={14} />
+                  </button>
                   <button onClick={() => addBalance(user.id)} className="bg-green-500 text-white p-1.5 rounded-lg hover:bg-green-600" title="Add Balance">
                     <DollarSign size={14} />
                   </button>
                   <button onClick={() => toggleStatus(user.id, user.is_active)}
-                    className={`${user.is_active ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'} text-white p-1.5 rounded-lg`}>
+                    className={`${user.is_active ? 'bg-orange-500 hover:bg-orange-600' : 'bg-green-500 hover:bg-green-600'} text-white p-1.5 rounded-lg`}
+                    title={user.is_active ? 'Ban' : 'Unban'}>
                     <Power size={14} />
+                  </button>
+                  <button onClick={() => deleteUser(user.id, user.email)} className="bg-red-500 text-white p-1.5 rounded-lg hover:bg-red-600" title="Delete">
+                    <Trash2 size={14} />
                   </button>
                 </div>
               </div>
@@ -343,7 +416,9 @@ export default function AdminPanel() {
                   <td className="px-6 py-4 text-sm text-slate-800">{user.full_name || '-'}</td>
                   <td className="px-6 py-4">
                     <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                      user.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
+                      user.role === 'admin' ? 'bg-purple-100 text-purple-700'
+                      : user.role === 'operator' ? 'bg-orange-100 text-orange-700'
+                      : 'bg-blue-100 text-blue-700'
                     }`}>{user.role}</span>
                   </td>
                   <td className="px-6 py-4 text-sm font-semibold text-green-600">${parseFloat(user.balance as string).toFixed(2)}</td>
@@ -354,12 +429,19 @@ export default function AdminPanel() {
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex gap-2">
+                      <button onClick={() => openEdit(user)} className="bg-indigo-500 text-white p-2 rounded-lg hover:bg-indigo-600" title="Edit">
+                        <Pencil size={15} />
+                      </button>
                       <button onClick={() => addBalance(user.id)} className="bg-green-500 text-white p-2 rounded-lg hover:bg-green-600" title="Add Balance">
-                        <DollarSign size={16} />
+                        <DollarSign size={15} />
                       </button>
                       <button onClick={() => toggleStatus(user.id, user.is_active)}
-                        className={`${user.is_active ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'} text-white p-2 rounded-lg`}>
-                        <Power size={16} />
+                        className={`${user.is_active ? 'bg-orange-500 hover:bg-orange-600' : 'bg-green-500 hover:bg-green-600'} text-white p-2 rounded-lg`}
+                        title={user.is_active ? 'Ban' : 'Unban'}>
+                        <Power size={15} />
+                      </button>
+                      <button onClick={() => deleteUser(user.id, user.email)} className="bg-red-500 text-white p-2 rounded-lg hover:bg-red-600" title="Delete">
+                        <Trash2 size={15} />
                       </button>
                     </div>
                   </td>
@@ -369,6 +451,123 @@ export default function AdminPanel() {
           </table>
         </div>
       </div>
+      {/* Rounds History */}
+      <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+        <div className="px-4 sm:px-6 py-3 sm:py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <History className="w-4 h-4 sm:w-5 sm:h-5 text-indigo-600" />
+            <h3 className="font-semibold text-slate-700 text-sm sm:text-base">Game History</h3>
+          </div>
+          <button onClick={fetchRounds} className="text-xs text-indigo-500 hover:text-indigo-700 font-medium">Refresh</button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[600px]">
+            <thead className="bg-slate-100">
+              <tr>
+                {['#', 'Operator', 'Cartelas', '🥇 1st', '🥈 2nd', '🥉 3rd', 'Status', 'Date'].map(h => (
+                  <th key={h} className="px-3 sm:px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {rounds.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-slate-400 text-sm">No games yet</td>
+                </tr>
+              ) : rounds.map(r => (
+                <tr key={r.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-3 sm:px-4 py-3 text-sm font-bold text-indigo-600">#{r.game_number}</td>
+                  <td className="px-3 sm:px-4 py-3 text-sm text-slate-700">{r.operator_name || '—'}</td>
+                  <td className="px-3 sm:px-4 py-3 text-sm text-slate-700 text-center">
+                    <span className="font-semibold">{r.total_purchases ?? 0}</span>
+                    <span className="text-slate-400">/{r.total_cartelas}</span>
+                  </td>
+                  <td className="px-3 sm:px-4 py-3">
+                    {r.winner_1 ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold">
+                        #{r.winner_1}{r.prize_1 ? ` · ${r.prize_1}Br` : ''}
+                      </span>
+                    ) : <span className="text-slate-300 text-xs">—</span>}
+                  </td>
+                  <td className="px-3 sm:px-4 py-3">
+                    {r.winner_2 ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold">
+                        #{r.winner_2}{r.prize_2 ? ` · ${r.prize_2}Br` : ''}
+                      </span>
+                    ) : <span className="text-slate-300 text-xs">—</span>}
+                  </td>
+                  <td className="px-3 sm:px-4 py-3">
+                    {r.winner_3 ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-orange-100 text-orange-800 text-xs font-bold">
+                        #{r.winner_3}{r.prize_3 ? ` · ${r.prize_3}Br` : ''}
+                      </span>
+                    ) : <span className="text-slate-300 text-xs">—</span>}
+                  </td>
+                  <td className="px-3 sm:px-4 py-3">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                      r.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                    }`}>{r.status}</span>
+                  </td>
+                  <td className="px-3 sm:px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
+                    {new Date(r.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Edit User Modal */}
+      {editUser && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-800">Edit User</h3>
+              <button onClick={() => setEditUser(null)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+            </div>
+            <div className="space-y-3">
+              {[
+                { label: 'Email', key: 'email', type: 'email' },
+                { label: 'Full Name', key: 'full_name', type: 'text' },
+                { label: 'New Password', key: 'password', type: 'password' },
+              ].map(({ label, key, type }) => (
+                <div key={key}>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">{label}</label>
+                  <input
+                    type={type}
+                    placeholder={key === 'password' ? 'Leave blank to keep current' : ''}
+                    value={(editForm as any)[key]}
+                    onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:border-indigo-500"
+                  />
+                </div>
+              ))}
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Role</label>
+                <select value={editForm.role} onChange={e => setEditForm(f => ({ ...f, role: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:border-indigo-500">
+                  <option value="user">User</option>
+                  <option value="operator">Operator</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => setEditUser(null)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50">
+                Cancel
+              </button>
+              <button onClick={saveEdit} disabled={editSaving}
+                className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60">
+                {editSaving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Pencil size={14} />}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

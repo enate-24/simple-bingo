@@ -32,18 +32,21 @@ app.use(express.json());
 app.get('/health', (req, res) => res.json({ status: 'ok', version: '2' }));
 
 // Get current open game status (for operator to resume)
-app.get('/api/game/status', async (req, res) => {
+app.get('/api/game/status', authMiddleware, async (req: AuthRequest, res) => {
   try {
+    const operatorId = req.user!.id;
     const roundResult = await pool.query(
       `SELECT id, total_cartelas, cartela_price, prize_1, prize_2, prize_3, status, started_at
-       FROM rounds WHERE status = 'open' ORDER BY started_at DESC LIMIT 1`
+       FROM rounds WHERE status = 'open' AND operator_id = $1 ORDER BY started_at DESC LIMIT 1`,
+      [operatorId]
     );
     if (roundResult.rows.length === 0) return res.json({ open: false });
     const round = roundResult.rows[0];
-    // Only consider it "configured" if price/prizes were set
     const configured = round.cartela_price != null;
-    const stockResult = await pool.query('SELECT total_cartelas, sold_cartelas FROM cartela_stock WHERE id = 1');
-    const stock = stockResult.rows[0];
+    const soldResult = await pool.query(
+      `SELECT COUNT(*) as sold FROM cartela_purchases WHERE round_id = $1`, [round.id]
+    );
+    const sold = parseInt(soldResult.rows[0].sold);
     res.json({
       open: true,
       configured,
@@ -52,9 +55,9 @@ app.get('/api/game/status', async (req, res) => {
       prize1: round.prize_1,
       prize2: round.prize_2,
       prize3: round.prize_3,
-      totalCartelas: stock.total_cartelas,
-      soldCartelas: stock.sold_cartelas,
-      remaining: stock.total_cartelas - stock.sold_cartelas,
+      totalCartelas: round.total_cartelas,
+      soldCartelas: sold,
+      remaining: round.total_cartelas - sold,
     });
   } catch (e) {
     res.status(500).json({ error: 'Failed to get game status' });
@@ -175,6 +178,7 @@ app.post('/api/game/start', authMiddleware, async (req: AuthRequest, res) => {
   const client = await pool.connect();
   try {
     const { selected_numbers, phone_number, customer_name, cartela_price, prize1, prize2, prize3 } = req.body;
+    const operatorId = req.user!.id;
 
     if (!selected_numbers || !Array.isArray(selected_numbers) || selected_numbers.length === 0) {
       return res.status(400).json({ error: 'Selected numbers are required' });
@@ -182,39 +186,38 @@ app.post('/api/game/start', authMiddleware, async (req: AuthRequest, res) => {
 
     await client.query('BEGIN');
 
-    // Check cartela availability
-    const stockResult = await client.query(
-      'SELECT total_cartelas, sold_cartelas FROM cartela_stock WHERE id = 1 FOR UPDATE'
+    // Get operator's open round (locked)
+    const roundResult = await client.query(
+      `SELECT id, total_cartelas, cartela_price FROM rounds WHERE status = 'open' AND operator_id = $1 ORDER BY started_at DESC LIMIT 1 FOR UPDATE`,
+      [operatorId]
     );
-    const stock = stockResult.rows[0];
-    if (stock.total_cartelas - stock.sold_cartelas <= 0) {
+    if (roundResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'No active round' });
+    }
+    const round = roundResult.rows[0];
+    const roundId = round.id;
+
+    // Count sold cartelas for this round
+    const soldResult = await client.query(
+      `SELECT COUNT(*) as sold FROM cartela_purchases WHERE round_id = $1`, [roundId]
+    );
+    const sold = parseInt(soldResult.rows[0].sold);
+    if (sold >= round.total_cartelas) {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'No cartelas remaining for this game.' });
     }
 
-    // Check cartela not already taken
+    // Check cartela not already taken in this round
     const dupCheck = await client.query(
-      `SELECT 1 FROM cartela_purchases cp
-       JOIN rounds r ON cp.round_id = r.id
-       WHERE r.status = 'open' AND cp.cartela_number = $1 LIMIT 1`,
-      [selected_numbers[0]]
+      `SELECT 1 FROM cartela_purchases WHERE round_id = $1 AND cartela_number = $2 LIMIT 1`,
+      [roundId, selected_numbers[0]]
     );
     if (dupCheck.rows.length > 0) {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Cartela already taken' });
     }
 
-    // Get open round
-    const roundResult = await client.query(
-      `SELECT id FROM rounds WHERE status = 'open' ORDER BY started_at DESC LIMIT 1`
-    );
-    if (roundResult.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'No active round' });
-    }
-    const roundId = roundResult.rows[0].id;
-
-    // Insert purchase + update stock + update round config in parallel-ish
     await client.query(
       'INSERT INTO cartela_purchases (round_id, cartela_number, customer_phone, customer_name) VALUES ($1, $2, $3, $4)',
       [roundId, selected_numbers[0], phone_number || 'N/A', customer_name || null]
@@ -230,6 +233,7 @@ app.post('/api/game/start', authMiddleware, async (req: AuthRequest, res) => {
       [cartela_price || null, prize1 || null, prize2 || null, prize3 || null, roundId]
     );
 
+    // Also keep cartela_stock in sync for backward compat
     await client.query(
       'UPDATE cartela_stock SET sold_cartelas = sold_cartelas + 1, updated_at = NOW() WHERE id = 1'
     );
@@ -243,8 +247,7 @@ app.post('/api/game/start', authMiddleware, async (req: AuthRequest, res) => {
       .then(msg => sendTelegramMessage(msg).catch(console.error))
       .catch(console.error);
 
-    // Restart broadcast
-    const remaining = stock.total_cartelas - stock.sold_cartelas - 1;
+    const remaining = round.total_cartelas - sold - 1;
     if (remaining > 0) {
       startBroadcast({ price: cartela_price || '?', prize1: prize1 || 'N/A', prize2: prize2 || 'N/A', prize3: prize3 || 'N/A' });
     } else {
@@ -494,6 +497,44 @@ app.patch('/api/admin/users/:id/status', authMiddleware, adminMiddleware, async 
   }
 });
 
+app.patch('/api/admin/users/:id', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const { full_name, email, password, role } = req.body;
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+    if (full_name !== undefined) { fields.push(`full_name = $${idx++}`); values.push(full_name); }
+    if (email !== undefined)     { fields.push(`email = $${idx++}`);     values.push(email); }
+    if (role !== undefined)      { fields.push(`role = $${idx++}`);      values.push(role); }
+    if (password) {
+      const { hashPassword } = await import('./auth.js');
+      fields.push(`password_hash = $${idx++}`);
+      values.push(await hashPassword(password));
+    }
+    if (fields.length === 0) return res.status(400).json({ error: 'Nothing to update' });
+    fields.push(`updated_at = NOW()`);
+    values.push(id);
+    const result = await pool.query(
+      `UPDATE users SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, email, full_name, role, balance, is_active`,
+      values
+    );
+    res.json(result.rows[0]);
+  } catch (error: any) {
+    if (error.code === '23505') return res.status(400).json({ error: 'Email already exists' });
+    res.status(500).json({ error: 'Failed to update user' });
+  }
+});
+
+app.delete('/api/admin/users/:id', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
+  try {
+    await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete user' });
+  }
+});
+
 // Save winners for current round
 app.post('/api/admin/rounds/winners', authMiddleware, async (req: AuthRequest, res) => {
   try {
@@ -573,17 +614,112 @@ app.post('/api/admin/rounds/winners', authMiddleware, async (req: AuthRequest, r
   }
 });
 
+// Check if winners are pre-picked for current round (without revealing them)
+app.get('/api/admin/rounds/preset-status', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT r.id, r.winner_1, r.winner_2, r.winner_3, r.winners_revealed
+       FROM rounds r WHERE r.status = 'open' AND r.operator_id = $1 ORDER BY r.started_at DESC LIMIT 1`,
+      [req.user!.id]
+    );
+    if (result.rows.length === 0) return res.json({ revealed: 0, revealedWinners: [] });
+    const row = result.rows[0];
+    const revealed: number = row.winners_revealed ?? 0;
+    const revealedWinners: number[] = [];
+    if (revealed >= 1 && row.winner_1) revealedWinners.push(row.winner_1);
+    if (revealed >= 2 && row.winner_2) revealedWinners.push(row.winner_2);
+    if (revealed >= 3 && row.winner_3) revealedWinners.push(row.winner_3);
+    res.json({ revealed, revealedWinners });
+  } catch {
+    res.status(500).json({ error: 'Failed to check preset status' });
+  }
+});
+
 // Get round history
 app.get('/api/admin/rounds', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
   try {
-    const result = await pool.query(
-      `SELECT r.*, 
-        (SELECT COUNT(*) FROM cartela_purchases WHERE round_id = r.id) as total_purchases
-       FROM rounds r ORDER BY r.started_at DESC LIMIT 20`
+    const roundsResult = await pool.query(
+      `SELECT r.*,
+        (SELECT COUNT(*) FROM cartela_purchases WHERE round_id = r.id) as total_purchases,
+        ROW_NUMBER() OVER (ORDER BY r.started_at ASC) as game_number,
+        COALESCE(u.full_name, u.email, 'Unknown') as operator_name
+       FROM rounds r
+       LEFT JOIN users u ON u.id = r.operator_id
+       ORDER BY r.started_at DESC LIMIT 100`
     );
-    res.json(result.rows);
+    res.json(roundsResult.rows);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch rounds' });
+  }
+});
+app.post('/api/admin/rounds/reveal-winner', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const roundResult = await pool.query(
+      `SELECT id, preset_winner_1, preset_winner_2, preset_winner_3, winners_revealed,
+              prize_1, prize_2, prize_3
+       FROM rounds WHERE status = 'open' AND operator_id = $1 ORDER BY started_at DESC LIMIT 1`,
+      [req.user!.id]
+    );
+    if (roundResult.rows.length === 0) return res.status(404).json({ error: 'No active round' });
+    const round = roundResult.rows[0];
+
+    if (!round.preset_winner_1) {
+      return res.status(400).json({ error: 'Winners not yet pre-picked. Not all cartelas sold.' });
+    }
+
+    const revealed: number = round.winners_revealed ?? 0;
+    if (revealed >= 3) return res.status(400).json({ error: 'All winners already revealed' });
+
+    const presetCols = ['preset_winner_1', 'preset_winner_2', 'preset_winner_3'];
+    const winnerCols = ['winner_1', 'winner_2', 'winner_3'];
+    const phoneCols  = ['winner_1_phone', 'winner_2_phone', 'winner_3_phone'];
+    const prizes     = [round.prize_1, round.prize_2, round.prize_3];
+
+    const cartela: number = round[presetCols[revealed]];
+    const place = revealed + 1;
+
+    // Look up customer info
+    const custResult = await pool.query(
+      'SELECT customer_phone, customer_name FROM cartela_purchases WHERE round_id = $1 AND cartela_number = $2 LIMIT 1',
+      [round.id, cartela]
+    );
+    const cust = custResult.rows[0];
+    const masked = cust ? maskPhone(cust.customer_phone) : 'N/A';
+    const label  = cust?.customer_name ? `${cust.customer_name} (${masked})` : masked;
+
+    const newRevealed = revealed + 1;
+    const isComplete  = newRevealed >= 3;
+
+    await pool.query(
+      `UPDATE rounds SET ${winnerCols[revealed]} = $1, ${phoneCols[revealed]} = $2,
+        winners_revealed = $3,
+        status = $4, completed_at = $5
+       WHERE id = $6`,
+      [cartela, cust?.customer_phone ?? null, newRevealed,
+       isComplete ? 'completed' : 'open', isComplete ? new Date() : null, round.id]
+    );
+
+    // Telegram notification
+    const placeLabels = ['🥇 1st Place', '🥈 2nd Place', '🥉 3rd Place'];
+    let msg =
+      `${placeLabels[revealed]} <b>Winner!</b>\n\n` +
+      `🎟️ <b>Cartela:</b> #${cartela}\n` +
+      `👤 <b>Customer:</b> ${label}\n` +
+      `💰 <b>Prize:</b> ${prizes[revealed] ? prizes[revealed] + ' Birr' : 'N/A'}`;
+
+    if (isComplete) {
+      const w = [round.preset_winner_1, round.preset_winner_2, round.preset_winner_3];
+      msg += `\n\n🎉 <b>All winners selected!</b>\n\n` +
+        `🥇 Cartela #${w[0]} — ${prizes[0] ? prizes[0] + ' Birr' : 'N/A'}\n` +
+        `🥈 Cartela #${w[1]} — ${prizes[1] ? prizes[1] + ' Birr' : 'N/A'}\n` +
+        `🥉 Cartela #${w[2]} — ${prizes[2] ? prizes[2] + ' Birr' : 'N/A'}`;
+    }
+    sendTelegramMessage(msg).catch(console.error);
+
+    res.json({ place, cartela_number: cartela, customer_label: label, prize: prizes[revealed], is_complete: isComplete });
+  } catch (error) {
+    console.error('Reveal winner error:', error);
+    res.status(500).json({ error: 'Failed to reveal winner' });
   }
 });
 
@@ -675,9 +811,9 @@ app.patch('/api/admin/rounds/config', authMiddleware, async (req: AuthRequest, r
         prize_1 = COALESCE($2, prize_1),
         prize_2 = COALESCE($3, prize_2),
         prize_3 = COALESCE($4, prize_3)
-       WHERE status = 'open'
+       WHERE status = 'open' AND operator_id = $5
        RETURNING cartela_price, prize_1, prize_2, prize_3`,
-      [cartela_price || null, prize_1 || null, prize_2 || null, prize_3 || null]
+      [cartela_price || null, prize_1 || null, prize_2 || null, prize_3 || null, req.user!.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'No active round' });
     res.json({ success: true, ...result.rows[0] });
@@ -725,6 +861,29 @@ function stopBroadcast() {
     clearInterval(broadcastInterval);
     broadcastInterval = null;
   }
+}
+
+// Pre-pick 3 random winners from all sold cartelas and store them (hidden until revealed)
+async function pickAndStoreWinners(roundId: number): Promise<void> {
+  const result = await pool.query(
+    'SELECT cartela_number FROM cartela_purchases WHERE round_id = $1',
+    [roundId]
+  );
+  const numbers: number[] = result.rows.map((r: any) => r.cartela_number);
+  if (numbers.length < 3) return;
+
+  // Fisher-Yates shuffle, pick first 3
+  for (let i = numbers.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [numbers[i], numbers[j]] = [numbers[j], numbers[i]];
+  }
+  const [w1, w2, w3] = numbers;
+
+  await pool.query(
+    `UPDATE rounds SET preset_winner_1 = $1, preset_winner_2 = $2, preset_winner_3 = $3, winners_revealed = 0 WHERE id = $4`,
+    [w1, w2, w3, roundId]
+  );
+  console.log(`[Winners] Pre-picked for round ${roundId}: ${w1}, ${w2}, ${w3}`);
 }
 
 function maskPhone(phone: string): string {
@@ -799,32 +958,33 @@ function startBroadcast(config: typeof broadcastConfig) {
   }, 120000);
 }
 
-// Cartela stock routes
-app.get('/api/cartelas/stock', async (req, res) => {
+// Cartela stock routes — operator-scoped
+app.get('/api/cartelas/stock', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const now = Date.now();
-    if (stockCache && now - stockCache.ts < STOCK_CACHE_TTL) {
-      return res.json(stockCache.data);
-    }
+    const operatorId = req.user!.id;
 
-    const stockResult = await pool.query('SELECT * FROM cartela_stock WHERE id = 1');
-    const stock = stockResult.rows[0];
+    const roundResult = await pool.query(
+      `SELECT id, total_cartelas FROM rounds WHERE status = 'open' AND operator_id = $1 ORDER BY started_at DESC LIMIT 1`,
+      [operatorId]
+    );
+    if (roundResult.rows.length === 0) {
+      return res.json({ total_cartelas: 0, sold_cartelas: 0, remaining: 0, sold_numbers: [] });
+    }
+    const round = roundResult.rows[0];
 
     const soldResult = await pool.query(
-      `SELECT cp.cartela_number as num
-       FROM cartela_purchases cp
-       JOIN rounds r ON cp.round_id = r.id
-       WHERE r.status = 'open'`
+      `SELECT cartela_number as num FROM cartela_purchases WHERE round_id = $1`,
+      [round.id]
     );
     const soldNumbers = soldResult.rows.map((r: any) => r.num);
+    const sold = soldNumbers.length;
 
-    const payload = {
-      ...stock,
-      remaining: stock.total_cartelas - stock.sold_cartelas,
-      sold_numbers: soldNumbers
-    };
-    stockCache = { data: payload, ts: now };
-    res.json(payload);
+    res.json({
+      total_cartelas: round.total_cartelas,
+      sold_cartelas: sold,
+      remaining: round.total_cartelas - sold,
+      sold_numbers: soldNumbers,
+    });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch cartela stock' });
   }
@@ -845,26 +1005,69 @@ app.patch('/api/admin/cartelas/stock', authMiddleware, adminMiddleware, async (r
 });
 
 app.post('/api/admin/cartelas/reset', authMiddleware, async (req: AuthRequest, res) => {
+  const client = await pool.connect();
   try {
     const { total_cartelas, cartela_price, prize_1, prize_2, prize_3 } = req.body;
     const total = total_cartelas ?? 20;
 
-    // Close any open round
-    await pool.query(`UPDATE rounds SET status = 'completed', completed_at = NOW() WHERE status = 'open'`);
+    await client.query('BEGIN');
 
-    // Create new round with config if provided
-    await pool.query(
-      `INSERT INTO rounds (total_cartelas, cartela_price, prize_1, prize_2, prize_3) VALUES ($1, $2, $3, $4, $5)`,
-      [total, cartela_price || null, prize_1 || null, prize_2 || null, prize_3 || null]
+    // Deduct 30 Birr game fee from operator balance (only when starting a new game with config)
+    const isNewGame = cartela_price != null;
+    if (isNewGame) {
+      const GAME_FEE = 30;
+      const userResult = await client.query(
+        'SELECT balance FROM users WHERE id = $1 FOR UPDATE',
+        [req.user!.id]
+      );
+      const currentBalance = parseFloat(userResult.rows[0]?.balance ?? '0');
+      if (currentBalance < GAME_FEE) {
+        await client.query('ROLLBACK');
+        return res.status(402).json({ error: 'Insufficient balance. 30 Birr required to start a game.' });
+      }
+      await client.query(
+        'UPDATE users SET balance = balance - $1, updated_at = NOW() WHERE id = $2',
+        [GAME_FEE, req.user!.id]
+      );
+      await client.query(
+        'INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)',
+        [req.user!.id, GAME_FEE, 'debit', 'Game fee (30 Birr)']
+      );
+    }
+
+    // Close any open round for THIS operator only
+    await client.query(`UPDATE rounds SET status = 'completed', completed_at = NOW() WHERE status = 'open' AND operator_id = $1`, [req.user!.id]);
+
+    // Create new round with operator_id
+    const roundInsert = await client.query(
+      `INSERT INTO rounds (total_cartelas, cartela_price, prize_1, prize_2, prize_3, operator_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [total, cartela_price || null, prize_1 || null, prize_2 || null, prize_3 || null, req.user!.id]
     );
+    const newRoundId = roundInsert.rows[0].id;
 
-    const result = await pool.query(
+    // Pre-pick 3 winners immediately from the full cartela range (1..total)
+    const allNumbers: number[] = Array.from({ length: total }, (_, i) => i + 1);
+    for (let i = allNumbers.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [allNumbers[i], allNumbers[j]] = [allNumbers[j], allNumbers[i]];
+    }
+    const [w1, w2, w3] = allNumbers;
+    await client.query(
+      `UPDATE rounds SET preset_winner_1 = $1, preset_winner_2 = $2, preset_winner_3 = $3, winners_revealed = 0 WHERE id = $4`,
+      [w1, w2, w3, newRoundId]
+    );
+    console.log(`[Winners] Pre-picked at game start for round ${newRoundId}: ${w1}, ${w2}, ${w3}`);
+
+    const result = await client.query(
       'UPDATE cartela_stock SET total_cartelas = $1, sold_cartelas = 0, round_started_at = NOW(), updated_at = NOW() WHERE id = 1 RETURNING *',
       [total]
     );
     const stock = result.rows[0];
-    stockCache = null; // invalidate cache
-    stopBroadcast(); // stop any running broadcast
+
+    await client.query('COMMIT');
+
+    stockCache = null;
+    stopBroadcast();
 
     await sendTelegramMessage(
       `🔄 <b>New Round Started!</b>\n📦 <b>${stock.total_cartelas} cartelas</b> available. Good luck! 🍀`
@@ -872,7 +1075,10 @@ app.post('/api/admin/cartelas/reset', authMiddleware, async (req: AuthRequest, r
 
     res.json({ ...stock, remaining: stock.total_cartelas - stock.sold_cartelas });
   } catch (error) {
+    await client.query('ROLLBACK');
     res.status(500).json({ error: 'Failed to reset cartela stock' });
+  } finally {
+    client.release();
   }
 });
 

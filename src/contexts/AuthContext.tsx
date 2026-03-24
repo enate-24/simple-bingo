@@ -4,7 +4,7 @@ interface User {
   id: number;
   email: string;
   full_name: string | null;
-  role: 'user' | 'admin';
+  role: 'user' | 'admin' | 'operator';
   balance: number;
   is_active: boolean;
 }

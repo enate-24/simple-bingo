@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Wallet, TrendingUp, TrendingDown, Clock, Copy, CheckCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
 
 interface Transaction {
   id: number;
@@ -24,12 +23,12 @@ export default function Balance() {
   const [paymentAddresses, setPaymentAddresses] = useState<PaymentAddress[]>([]);
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<number | null>(null);
-  const { user, token } = useAuth();
-  const navigate = useNavigate();
+  const { user, token, refreshUser } = useAuth();
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
   useEffect(() => {
+    refreshUser();
     fetchTransactions();
     fetchPaymentAddresses();
   }, []);
@@ -90,6 +89,17 @@ export default function Balance() {
     .filter(t => t.type === 'debit')
     .reduce((sum, t) => sum + parseFloat(t.amount.toString()), 0);
 
+  // Compute running balance after each transaction (transactions are newest-first)
+  // Start from current balance and work backwards
+  const withBalance = transactions.map((t, i) => {
+    const laterTransactions = transactions.slice(0, i);
+    const laterNet = laterTransactions.reduce((sum, lt) => {
+      return sum + (lt.type === 'credit' ? parseFloat(lt.amount.toString()) : -parseFloat(lt.amount.toString()));
+    }, 0);
+    const balanceAfter = (user?.balance ?? 0) + laterNet;
+    return { ...t, balanceAfter };
+  });
+
   return (
     <div className="min-h-screen p-3 sm:p-4 lg:p-6 pl-14 sm:pl-16">
       <div className="max-w-full mx-auto space-y-4 sm:space-y-6">
@@ -100,21 +110,21 @@ export default function Balance() {
               <Wallet className="w-5 h-5 sm:w-6 sm:h-6" />
               <p className="text-green-100 text-xs sm:text-sm font-medium">Current Balance</p>
             </div>
-            <p className="text-3xl sm:text-4xl font-bold">${user?.balance.toFixed(2)}</p>
+            <p className="text-3xl sm:text-4xl font-bold">{(user?.balance ?? 0).toFixed(2)} Br</p>
           </div>
           <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl shadow-2xl p-4 sm:p-6 text-white">
             <div className="flex items-center gap-2 sm:gap-3 mb-1 sm:mb-2">
               <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6" />
               <p className="text-blue-100 text-xs sm:text-sm font-medium">Total Credits</p>
             </div>
-            <p className="text-3xl sm:text-4xl font-bold">${totalCredits.toFixed(2)}</p>
+            <p className="text-3xl sm:text-4xl font-bold">{totalCredits.toFixed(2)} Br</p>
           </div>
           <div className="bg-gradient-to-br from-orange-500 to-red-600 rounded-2xl shadow-2xl p-4 sm:p-6 text-white">
             <div className="flex items-center gap-2 sm:gap-3 mb-1 sm:mb-2">
               <TrendingDown className="w-5 h-5 sm:w-6 sm:h-6" />
               <p className="text-orange-100 text-xs sm:text-sm font-medium">Total Spent</p>
             </div>
-            <p className="text-3xl sm:text-4xl font-bold">${totalDebits.toFixed(2)}</p>
+            <p className="text-3xl sm:text-4xl font-bold">{totalDebits.toFixed(2)} Br</p>
           </div>
         </div>
 
@@ -176,10 +186,11 @@ export default function Balance() {
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-xs sm:text-sm font-semibold text-slate-700">Description</th>
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-xs sm:text-sm font-semibold text-slate-700">Type</th>
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-right text-xs sm:text-sm font-semibold text-slate-700">Amount</th>
+                    <th className="px-3 sm:px-6 py-3 sm:py-4 text-right text-xs sm:text-sm font-semibold text-slate-700">Balance After</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {transactions.map((transaction) => (
+                  {withBalance.map((transaction) => (
                     <tr key={transaction.id} className="hover:bg-slate-50 transition-colors">
                       <td className="px-3 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm text-slate-600 whitespace-nowrap">
                         {formatDate(transaction.created_at)}
@@ -202,7 +213,12 @@ export default function Balance() {
                       </td>
                       <td className="px-3 sm:px-6 py-3 sm:py-4 text-right">
                         <span className={`text-sm sm:text-base font-bold ${transaction.type === 'credit' ? 'text-green-600' : 'text-red-600'}`}>
-                          {transaction.type === 'credit' ? '+' : '-'}${parseFloat(transaction.amount.toString()).toFixed(2)}
+                          {transaction.type === 'credit' ? '+' : '-'}{parseFloat(transaction.amount.toString()).toFixed(2)} Br
+                        </span>
+                      </td>
+                      <td className="px-3 sm:px-6 py-3 sm:py-4 text-right">
+                        <span className="text-sm font-semibold text-slate-700">
+                          {transaction.balanceAfter.toFixed(2)} Br
                         </span>
                       </td>
                     </tr>
@@ -223,7 +239,7 @@ export default function Balance() {
               <div className="text-right">
                 <p className="text-slate-600 text-xs sm:text-sm">Net Change</p>
                 <p className={`text-xl sm:text-2xl font-bold ${totalCredits - totalDebits >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {totalCredits - totalDebits >= 0 ? '+' : ''}${(totalCredits - totalDebits).toFixed(2)}
+                  {totalCredits - totalDebits >= 0 ? '+' : ''}{(totalCredits - totalDebits).toFixed(2)} Br
                 </p>
               </div>
             </div>

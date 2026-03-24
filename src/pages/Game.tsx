@@ -38,9 +38,7 @@ export default function Game() {
 
   // Modal
   const [pendingNumber, setPendingNumber] = useState<number | null>(null);
-  const [phoneNumber, setPhoneNumber] = useState('');
   const [customerName, setCustomerName] = useState('');
-  const [phoneError, setPhoneError] = useState('');
   const [nameError, setNameError] = useState('');
   const [isBuying, setIsBuying] = useState(false);
   const [error, setError] = useState('');
@@ -111,25 +109,50 @@ export default function Game() {
     };
   }, [fetchStock]);
 
+  // On game load, restore any already-revealed winners from server
+  useEffect(() => {
+    if (!gameConfig) return;
+    const restore = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/admin/rounds/preset-status`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.revealed > 0) {
+            setDrawnNumbers(data.revealedWinners ?? []);
+          }
+        }
+      } catch {}
+    };
+    restore();
+  }, [gameConfig, API_URL, token]);
+
   const soldSet = useMemo(() => new Set(stock?.sold_numbers ?? []), [stock?.sold_numbers]);
   const GAME_TOTAL = gameConfig ? Number(gameConfig.totalCartelas) : TOTAL;
   const allSold = stock ? stock.remaining === 0 : false;
 
   const handleDraw = async () => {
-    if (isDrawing || drawnNumbers.length >= 3 || !stock) return;
-    const available = (stock.sold_numbers ?? []).filter(n => !drawnNumbers.includes(n));
-    if (available.length === 0) return;
-    const drawn = available[Math.floor(Math.random() * available.length)];
+    if (isDrawing || drawnNumbers.length >= 3) return;
     setIsDrawing(true);
-    const newDrawn = [...drawnNumbers, drawn];
-    setDrawnNumbers(newDrawn);
+
+    // Fetch winner immediately, show animation for 5s then reveal
+    let winnerData: { cartela_number: number } | null = null;
     try {
-      await fetch(`${API_URL}/api/admin/rounds/winners`, {
+      const res = await fetch(`${API_URL}/api/admin/rounds/reveal-winner`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ winners: newDrawn.map((n, i) => ({ place: i + 1, cartela_number: n })) })
       });
-    } catch (e) { console.error('Failed to save winner', e); }
+      if (res.ok) winnerData = await res.json();
+      else { const err = await res.json(); console.error('Reveal winner failed:', err.error); }
+    } catch (e) {
+      console.error('Failed to reveal winner', e);
+    }
+
+    // 5-second suspense animation
+    await new Promise<void>(resolve => setTimeout(resolve, 5000));
+
+    if (winnerData) setDrawnNumbers(prev => [...prev, winnerData!.cartela_number]);
     setIsDrawing(false);
   };
 
@@ -152,9 +175,8 @@ export default function Game() {
     const errs = validateSetup();
     if (Object.keys(errs).length > 0) { setSetupErrors(errs); return; }
     setSetupErrors({});
-    // Reset stock with operator-chosen total and game config
     try {
-      await fetch(`${API_URL}/api/admin/cartelas/reset`, {
+      const res = await fetch(`${API_URL}/api/admin/cartelas/reset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -165,7 +187,15 @@ export default function Game() {
           prize_3: setupForm.prize3,
         })
       });
-    } catch {}
+      if (!res.ok) {
+        const err = await res.json();
+        setSetupErrors({ cartelaPrice: err.error || 'Failed to start game' });
+        return;
+      }
+    } catch {
+      setSetupErrors({ cartelaPrice: 'Network error, try again' });
+      return;
+    }
     setGameConfig({ ...setupForm });
     await fetchStock();
   };
@@ -226,20 +256,15 @@ export default function Game() {
     if (soldSet.has(num)) return;
     setError('');
     setPendingNumber(num);
-    setPhoneNumber('');
     setCustomerName('');
-    setPhoneError('');
     setNameError('');
   };
 
   const confirmBuy = async () => {
     if (!customerName.trim()) { setNameError('Customer name is required'); return; }
-    if (!phoneNumber.trim()) { setPhoneError('Phone number is required'); return; }
-    if (!/^[0-9+\s\-]{7,15}$/.test(phoneNumber.trim())) { setPhoneError('Enter a valid phone number'); return; }
     if (pendingNumber === null) return;
 
     setIsBuying(true);
-    setPhoneError('');
     setNameError('');
     try {
       const res = await fetch(`${API_URL}/api/game/start`, {
@@ -247,7 +272,7 @@ export default function Game() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           selected_numbers: [pendingNumber],
-          phone_number: phoneNumber.trim(),
+          phone_number: 'N/A',
           customer_name: customerName.trim(),
           cartela_price: gameConfig?.cartelaPrice,
           prize1: gameConfig?.prize1,
@@ -261,9 +286,8 @@ export default function Game() {
         setPendingNumber(null);
         return;
       }
-      setSoldEntries(prev => [...prev, { number: pendingNumber, phone: phoneNumber.trim(), name: customerName.trim() }]);
+      setSoldEntries(prev => [...prev, { number: pendingNumber, phone: '', name: customerName.trim() }]);
       setPendingNumber(null);
-      setPhoneNumber('');
       setCustomerName('');
       await fetchStock();
     } catch {
@@ -362,6 +386,7 @@ export default function Game() {
           >
             Start Selling <ArrowRight size={16} />
           </button>
+          <p className="mt-3 text-center text-xs text-slate-400">30 Birr will be deducted from your balance</p>
         </div>
       </div>
     );
@@ -463,7 +488,7 @@ export default function Game() {
                 </div>
                 <div className="min-w-0">
                   <h3 className="text-base sm:text-lg font-bold text-white">Draw Winners</h3>
-                  <p className="text-indigo-300 text-xs">All {stock?.total_cartelas} cartelas sold!</p>
+                  <p className="text-indigo-300 text-xs">Winners pre-selected — reveal one at a time</p>
                 </div>
                 <div className="ml-auto bg-indigo-900/60 border border-indigo-700 px-3 py-1.5 rounded-xl shrink-0 text-center">
                   <p className="text-indigo-300 text-xs">Winners</p>
@@ -479,10 +504,10 @@ export default function Game() {
                   return (
                     <div key={idx} className={`flex flex-col items-center justify-center rounded-xl border-2 p-2 sm:p-4 transition-all duration-500 ${
                       winner ? `bg-gradient-to-br ${WINNER_COLORS[idx]} border-transparent shadow-2xl`
-                        : isDrawingThis ? 'bg-indigo-900/60 border-indigo-500 animate-pulse'
+                        : isDrawingThis ? 'bg-indigo-950 border-yellow-400/60'
                         : 'bg-indigo-950/40 border-indigo-800/50'
                     }`}>
-                      <p className={`text-xs font-bold mb-1 ${winner ? 'text-black/70' : 'text-indigo-400'}`}>
+                      <p className={`text-xs font-bold mb-1 ${winner ? 'text-black/70' : isDrawingThis ? 'text-yellow-300' : 'text-indigo-400'}`}>
                         {WINNER_LABELS[idx]}
                       </p>
                       {winner ? (
@@ -493,7 +518,19 @@ export default function Game() {
                           <Trophy className="w-4 h-4 text-white/80 mt-1" />
                         </>
                       ) : isDrawingThis ? (
-                        <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-full border-4 border-indigo-400 border-t-transparent animate-spin" />
+                        /* Lottery ball bounce animation */
+                        <div className="flex items-end justify-center gap-1 h-10 sm:h-14">
+                          {[0, 1, 2].map(b => (
+                            <div
+                              key={b}
+                              className="w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-gradient-to-br from-yellow-300 to-orange-400 shadow-lg shadow-yellow-400/50"
+                              style={{
+                                animation: 'lotteryBounce 0.7s ease-in-out infinite',
+                                animationDelay: `${b * 0.15}s`,
+                              }}
+                            />
+                          ))}
+                        </div>
                       ) : (
                         <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-full border-2 border-dashed border-indigo-700 flex items-center justify-center">
                           <Star className="w-4 h-4 sm:w-6 sm:h-6 text-indigo-700" />
@@ -505,17 +542,28 @@ export default function Game() {
               </div>
 
               {drawnNumbers.length < 3 ? (
-                <button onClick={handleDraw} disabled={isDrawing}
-                  className={`w-full py-3 sm:py-4 rounded-xl font-bold text-sm sm:text-lg flex items-center justify-center gap-2 transition-all ${
-                    !isDrawing
-                      ? 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white shadow-2xl'
-                      : 'bg-slate-700 text-slate-400 cursor-not-allowed'
-                  }`}>
-                  {isDrawing
-                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Drawing {WINNER_LABELS[drawnNumbers.length]}...</>
-                    : <><Sparkles size={18} className="animate-pulse" />Pick {WINNER_LABELS[drawnNumbers.length]}</>
-                  }
-                </button>
+                <div className="space-y-2">
+                  <button onClick={handleDraw} disabled={isDrawing}
+                    className={`w-full py-3 sm:py-4 rounded-xl font-bold text-sm sm:text-lg flex items-center justify-center gap-2 transition-all ${
+                      !isDrawing
+                        ? 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white shadow-2xl'
+                        : 'bg-indigo-950 border border-yellow-400/40 text-yellow-200 cursor-not-allowed'
+                    }`}>
+                    {isDrawing ? (
+                      <>
+                        <div className="flex items-end gap-0.5 h-5">
+                          {[0,1,2].map(b => (
+                            <div key={b} className="w-1.5 h-1.5 rounded-full bg-yellow-300"
+                              style={{ animation: 'lotteryBounce 0.7s ease-in-out infinite', animationDelay: `${b * 0.15}s` }} />
+                          ))}
+                        </div>
+                        Drawing {WINNER_LABELS[drawnNumbers.length]}...
+                      </>
+                    ) : (
+                      <><Sparkles size={18} className="animate-pulse" />Pick {WINNER_LABELS[drawnNumbers.length]}</>
+                    )}
+                  </button>
+                </div>
               ) : (
                 <div className="space-y-3">
                   <div className="w-full py-3 sm:py-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm sm:text-lg flex items-center justify-center gap-2 shadow-2xl">
@@ -548,7 +596,7 @@ export default function Game() {
               <div className="rounded-xl p-4 text-center border bg-indigo-500/10 border-indigo-400/20">
                 <div className="flex items-center justify-center gap-2 text-indigo-300 text-sm">
                   <Clock className="w-4 h-4 animate-pulse" />
-                  Draw starts when all {GAME_TOTAL} cartelas are registered
+                  Winners will be pre-selected once all {GAME_TOTAL} cartelas are registered
                 </div>
               </div>
               {!confirmEnd ? (
@@ -659,18 +707,6 @@ export default function Game() {
                   className={`w-full px-4 py-3 border-2 rounded-xl outline-none text-slate-800 text-base ${nameError ? 'border-red-400' : 'border-slate-200 focus:border-indigo-500'}`}
                 />
                 {nameError && <p className="text-red-500 text-xs mt-1">{nameError}</p>}
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wide">Phone Number</label>
-                <input
-                  type="tel"
-                  placeholder="e.g. 0912345678"
-                  value={phoneNumber}
-                  onChange={(e) => { setPhoneNumber(e.target.value); setPhoneError(''); }}
-                  onKeyDown={(e) => e.key === 'Enter' && confirmBuy()}
-                  className={`w-full px-4 py-3 border-2 rounded-xl outline-none text-slate-800 text-base ${phoneError ? 'border-red-400' : 'border-slate-200 focus:border-indigo-500'}`}
-                />
-                {phoneError && <p className="text-red-500 text-xs mt-1">{phoneError}</p>}
               </div>
             </div>
 

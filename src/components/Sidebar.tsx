@@ -5,7 +5,7 @@ interface User {
   id: number;
   email: string;
   full_name: string | null;
-  role: 'user' | 'admin';
+  role: 'user' | 'admin' | 'operator';
   balance: number;
   is_active: boolean;
 }
@@ -33,7 +33,14 @@ export default function Sidebar({ currentPage, onNavigate, user, onLogout }: Sid
     { id: 'settings' as const, label: 'Settings', icon: Settings },
   ];
 
-  const menuItems = user.role === 'admin' ? adminMenuItems : userMenuItems;
+  const operatorMenuItems = [
+    { id: 'game' as const, label: 'Lottery Game', icon: Trophy },
+    { id: 'settings' as const, label: 'Settings', icon: Settings },
+  ];
+
+  const menuItems = user.role === 'admin' ? adminMenuItems
+    : user.role === 'operator' ? operatorMenuItems
+    : userMenuItems;
 
   const handleNavigate = (page: 'game' | 'balance' | 'admin' | 'settings') => {
     onNavigate(page);
@@ -85,6 +92,11 @@ export default function Sidebar({ currentPage, onNavigate, user, onLogout }: Sid
               {user.role === 'admin' && (
                 <div className="mt-2">
                   <span className="text-xs bg-purple-600 text-white px-2 py-0.5 rounded-full">Admin</span>
+                </div>
+              )}
+              {user.role === 'operator' && (
+                <div className="mt-2">
+                  <span className="text-xs bg-orange-500 text-white px-2 py-0.5 rounded-full">Operator</span>
                 </div>
               )}
             </div>

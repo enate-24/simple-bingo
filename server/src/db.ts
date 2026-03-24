@@ -32,7 +32,7 @@ export const initDatabase = async () => {
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
         full_name VARCHAR(255),
-        role VARCHAR(20) DEFAULT 'user' CHECK (role IN ('user', 'admin')),
+        role VARCHAR(20) DEFAULT 'user' CHECK (role IN ('user', 'admin', 'operator')),
         balance DECIMAL(10, 2) DEFAULT 0.00,
         is_active BOOLEAN DEFAULT true,
         created_at TIMESTAMP DEFAULT NOW(),
@@ -149,9 +149,29 @@ export const initDatabase = async () => {
       ALTER TABLE rounds ADD COLUMN IF NOT EXISTS prize_3 DECIMAL(10,2);
     `);
 
+    // Preset winners columns (server-side pre-picked, hidden until revealed)
+    await client.query(`
+      ALTER TABLE rounds ADD COLUMN IF NOT EXISTS preset_winner_1 INTEGER;
+      ALTER TABLE rounds ADD COLUMN IF NOT EXISTS preset_winner_2 INTEGER;
+      ALTER TABLE rounds ADD COLUMN IF NOT EXISTS preset_winner_3 INTEGER;
+      ALTER TABLE rounds ADD COLUMN IF NOT EXISTS winners_revealed INTEGER DEFAULT 0;
+    `);
+
+    // Add operator_id to rounds (per-operator game isolation)
+    await client.query(`
+      ALTER TABLE rounds ADD COLUMN IF NOT EXISTS operator_id INTEGER REFERENCES users(id);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_rounds_operator_id ON rounds(operator_id);
+    `);
+
     // Ensure customer_name column exists on cartela_purchases (migration)
     await client.query(`
       ALTER TABLE cartela_purchases ADD COLUMN IF NOT EXISTS customer_name VARCHAR(100);
+    `);
+    await client.query(`
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+      ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('user', 'admin', 'operator'));
     `);
 
     // Ensure payment_addresses table exists (migration for existing DBs)
@@ -175,9 +195,25 @@ export const initDatabase = async () => {
     `);
 
     // Ensure active round exists
-    const roundCheck = await client.query(`SELECT id FROM rounds WHERE status = 'open' LIMIT 1`);
+    const roundCheck = await client.query(`SELECT id, total_cartelas FROM rounds WHERE status = 'open' LIMIT 1`);
     if (roundCheck.rows.length === 0) {
-      await client.query(`INSERT INTO rounds (total_cartelas) VALUES (20)`);
+      const newRound = await client.query(`INSERT INTO rounds (total_cartelas) VALUES (20) RETURNING id`);
+      const rid = newRound.rows[0].id;
+      // Pre-pick winners for the default round
+      const nums = Array.from({ length: 20 }, (_, i) => i + 1);
+      for (let i = nums.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [nums[i], nums[j]] = [nums[j], nums[i]]; }
+      await client.query(`UPDATE rounds SET preset_winner_1=$1, preset_winner_2=$2, preset_winner_3=$3, winners_revealed=0 WHERE id=$4`, [nums[0], nums[1], nums[2], rid]);
+    } else {
+      // Fix any open round missing pre-picked winners
+      const row = roundCheck.rows[0];
+      const missingCheck = await client.query(`SELECT preset_winner_1 FROM rounds WHERE id=$1`, [row.id]);
+      if (!missingCheck.rows[0]?.preset_winner_1) {
+        const total = row.total_cartelas || 20;
+        const nums = Array.from({ length: total }, (_, i) => i + 1);
+        for (let i = nums.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [nums[i], nums[j]] = [nums[j], nums[i]]; }
+        await client.query(`UPDATE rounds SET preset_winner_1=$1, preset_winner_2=$2, preset_winner_3=$3, winners_revealed=0 WHERE id=$4`, [nums[0], nums[1], nums[2], row.id]);
+        console.log(`[Winners] Fixed missing pre-picked winners for existing round ${row.id}`);
+      }
     }
 
     // Insert default cartela stock if not exists, or fix if wrong total
