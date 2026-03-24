@@ -519,11 +519,31 @@ app.patch('/api/admin/users/:id', authMiddleware, adminMiddleware, async (req: A
 });
 
 app.delete('/api/admin/users/:id', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
+  const client = await pool.connect();
   try {
-    await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
+    const { id } = req.params;
+    await client.query('BEGIN');
+    // Delete purchases for all rounds owned by this user
+    await client.query(
+      `DELETE FROM cartela_purchases WHERE round_id IN (SELECT id FROM rounds WHERE operator_id = $1)`, [id]
+    );
+    // Delete rounds owned by this user
+    await client.query(`DELETE FROM rounds WHERE operator_id = $1`, [id]);
+    // Delete user's settings and payment addresses
+    await client.query(`DELETE FROM system_settings WHERE user_id = $1`, [id]);
+    await client.query(`DELETE FROM payment_addresses WHERE user_id = $1`, [id]);
+    // Delete transactions (has ON DELETE CASCADE but be explicit)
+    await client.query(`DELETE FROM transactions WHERE user_id = $1`, [id]);
+    // Finally delete the user
+    await client.query(`DELETE FROM users WHERE id = $1`, [id]);
+    await client.query('COMMIT');
     res.json({ success: true });
   } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Delete user error:', error);
     res.status(500).json({ error: 'Failed to delete user' });
+  } finally {
+    client.release();
   }
 });
 
