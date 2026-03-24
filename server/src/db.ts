@@ -198,18 +198,32 @@ export const initDatabase = async () => {
     await client.query(`
       ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
     `);
-    // Drop old single-key primary key and add composite unique constraint
+    // Drop old single-key primary key, add id column, add composite unique index
+    await client.query(`ALTER TABLE system_settings DROP CONSTRAINT IF EXISTS system_settings_pkey;`);
+    await client.query(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS id SERIAL;`);
+    // Make id the new primary key if not already
     await client.query(`
-      ALTER TABLE system_settings DROP CONSTRAINT IF EXISTS system_settings_pkey;
-    `);
-    await client.query(`
-      ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS id SERIAL;
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'system_settings_id_pkey' AND conrelid = 'system_settings'::regclass
+        ) THEN
+          ALTER TABLE system_settings ADD PRIMARY KEY (id);
+        END IF;
+      END $$;
     `);
     await client.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_system_settings_key_user ON system_settings(key, user_id);
     `);
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_system_settings_user_id ON system_settings(user_id);
+    `);
+
+    // Add user_id to payment_addresses for per-operator payment methods
+    await client.query(`
+      ALTER TABLE payment_addresses ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_payment_addresses_user_id ON payment_addresses(user_id);
     `);
 
     // Ensure active round exists

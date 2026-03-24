@@ -65,27 +65,19 @@ app.get('/api/game/status', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // Telegram test endpoint
-app.get('/api/test-telegram', async (req, res) => {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_GROUP_CHAT_ID;
-  console.log('[Test] ENV BOT_TOKEN:', token ? token.slice(0, 10) + '...' : 'MISSING');
-  console.log('[Test] ENV CHAT_ID:', chatId || 'MISSING');
-
-  // Also check DB settings
+app.get('/api/test-telegram', authMiddleware, async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
   try {
-    const result = await pool.query('SELECT key, value FROM system_settings');
+    const result = await pool.query('SELECT key, value FROM system_settings WHERE user_id = $1', [userId]);
     const map: Record<string, string> = {};
     for (const row of result.rows) map[row.key] = row.value;
-    console.log('[Test] DB settings keys:', Object.keys(map));
-    console.log('[Test] DB token:', map['telegram_bot_token'] ? map['telegram_bot_token'].slice(0, 10) + '...' : 'MISSING');
-    console.log('[Test] DB chatId:', map['telegram_group_chat_id'] || 'MISSING');
+    console.log('[Test] DB settings keys for user', userId, ':', Object.keys(map));
   } catch (e: any) {
     console.error('[Test] DB error:', e.message);
   }
-
   try {
-    await sendTelegramMessage('🧪 <b>Test message from server</b>');
-    res.json({ ok: true, token: token ? 'set' : 'missing', chatId: chatId || 'missing' });
+    await sendTelegramMessage('🧪 <b>Test message from server</b>', userId);
+    res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -779,7 +771,7 @@ app.post('/api/admin/settings', authMiddleware, async (req: AuthRequest, res) =>
     for (const [key, value] of Object.entries(settings)) {
       await pool.query(
         `INSERT INTO system_settings (key, value, user_id, updated_at) VALUES ($1, $2, $3, NOW())
-         ON CONFLICT (key, user_id) DO UPDATE SET value = $2, updated_at = NOW()`,
+         ON CONFLICT (key, user_id) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
         [key, value, userId]
       );
     }
