@@ -20,6 +20,10 @@ interface Round {
   winner_1: number | null;
   winner_2: number | null;
   winner_3: number | null;
+  preset_winner_1: number | null;
+  preset_winner_2: number | null;
+  preset_winner_3: number | null;
+  winners_revealed: number;
   prize_1: string | null;
   prize_2: string | null;
   prize_3: string | null;
@@ -390,26 +394,38 @@ export default function AdminPanel() {
                       {/* Winners */}
                       <div className="flex items-center gap-3">
                         {[
-                          { winner: r.winner_1, prize: r.prize_1, label: '1st', bg: 'bg-amber-400', ring: 'ring-amber-300' },
-                          { winner: r.winner_2, prize: r.prize_2, label: '2nd', bg: 'bg-slate-400', ring: 'ring-slate-300' },
-                          { winner: r.winner_3, prize: r.prize_3, label: '3rd', bg: 'bg-orange-500', ring: 'ring-orange-300' },
-                        ].map(({ winner, prize, label, bg, ring }) => (
-                          <div key={label} className="flex flex-col items-center gap-1">
-                            <span className="text-xs text-slate-400">{label}</span>
-                            {winner ? (
-                              <div className={`w-10 h-10 rounded-full ${bg} ring-2 ${ring} flex items-center justify-center shadow`}>
-                                <span className="text-white font-black text-sm">{winner}</span>
-                              </div>
-                            ) : (
-                              <div className="w-10 h-10 rounded-full border-2 border-dashed border-slate-200 flex items-center justify-center">
-                                <span className="text-slate-300 text-xs">—</span>
-                              </div>
-                            )}
-                            {prize && winner && (
-                              <span className="text-xs font-semibold text-slate-600">{prize}Br</span>
-                            )}
-                          </div>
-                        ))}
+                          { revealed: r.winner_1, preset: r.preset_winner_1, prize: r.prize_1, label: '1st', bg: 'bg-amber-400', ring: 'ring-amber-300', presetBg: 'bg-amber-100', presetText: 'text-amber-700' },
+                          { revealed: r.winner_2, preset: r.preset_winner_2, prize: r.prize_2, label: '2nd', bg: 'bg-slate-400', ring: 'ring-slate-300', presetBg: 'bg-slate-100', presetText: 'text-slate-600' },
+                          { revealed: r.winner_3, preset: r.preset_winner_3, prize: r.prize_3, label: '3rd', bg: 'bg-orange-500', ring: 'ring-orange-300', presetBg: 'bg-orange-100', presetText: 'text-orange-700' },
+                        ].map(({ revealed, preset, prize, label, bg, ring, presetBg, presetText }) => {
+                          const displayNum = revealed ?? preset;
+                          const isRevealed = revealed != null;
+                          return (
+                            <div key={label} className="flex flex-col items-center gap-1">
+                              <span className="text-xs text-slate-400">{label}</span>
+                              {displayNum ? (
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow relative ${
+                                  isRevealed ? `${bg} ring-2 ${ring}` : `${presetBg} border-2 border-dashed border-current ${presetText}`
+                                }`}>
+                                  <span className={`font-black text-sm ${isRevealed ? 'text-white' : presetText}`}>{displayNum}</span>
+                                  {!isRevealed && (
+                                    <span className="absolute -top-1 -right-1 text-[9px] bg-slate-600 text-white rounded-full px-1 leading-4">pre</span>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="w-10 h-10 rounded-full border-2 border-dashed border-slate-200 flex items-center justify-center">
+                                  <span className="text-slate-300 text-xs">—</span>
+                                </div>
+                              )}
+                              {prize && displayNum && (
+                                <span className="text-xs font-semibold text-slate-600">{prize}Br</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {r.status === 'open' && r.preset_winner_1 && (
+                          <span className="ml-2 text-xs text-slate-400 italic">pre-picked, not yet revealed</span>
+                        )}
                       </div>
                     </div>
                   ))}

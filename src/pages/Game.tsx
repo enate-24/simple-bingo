@@ -78,6 +78,7 @@ export default function Game() {
   }, [API_URL, token]);
 
   useEffect(() => {
+    if (!token) return; // wait for auth to load
     // Check if a game is already open and resume it
     const checkStatus = async () => {
       try {
@@ -94,13 +95,16 @@ export default function Game() {
               prize3: String(data.prize3),
               totalCartelas: String(data.totalCartelas ?? 20),
             });
+          } else if (data.open && !data.configured) {
+            // Round exists but not configured yet — show setup
+            setGameConfig(null);
           }
         }
       } catch {}
       setStatusLoading(false);
     };
     checkStatus();
-  }, [API_URL]);
+  }, [API_URL, token]);
 
   useEffect(() => {
     fetchStock();
@@ -140,17 +144,26 @@ export default function Game() {
     if (isDrawing || drawnNumbers.length >= 3) return;
     setIsDrawing(true);
 
-    // Fetch winner immediately, show animation for 5s then reveal
     let winnerData: { cartela_number: number } | null = null;
     try {
       const res = await fetch(`${API_URL}/api/admin/rounds/reveal-winner`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       });
-      if (res.ok) winnerData = await res.json();
-      else { const err = await res.json(); console.error('Reveal winner failed:', err.error); }
+      if (res.ok) {
+        winnerData = await res.json();
+      } else {
+        const err = await res.json();
+        console.error('Reveal winner failed:', err.error);
+        setError(err.error || 'Failed to reveal winner');
+        setIsDrawing(false);
+        return;
+      }
     } catch (e) {
       console.error('Failed to reveal winner', e);
+      setError('Network error — failed to reveal winner');
+      setIsDrawing(false);
+      return;
     }
 
     // 5-second suspense animation
@@ -600,7 +613,7 @@ export default function Game() {
               <div className="rounded-xl p-4 text-center border bg-indigo-500/10 border-indigo-400/20">
                 <div className="flex items-center justify-center gap-2 text-indigo-300 text-sm">
                   <Clock className="w-4 h-4 animate-pulse" />
-                  Winners will be pre-selected once all {GAME_TOTAL} cartelas are registered
+                  Sell all {GAME_TOTAL} cartelas to unlock the winner draw
                 </div>
               </div>
               {!confirmEnd ? (

@@ -652,6 +652,7 @@ app.get('/api/admin/users/:id/rounds', authMiddleware, adminMiddleware, async (r
   try {
     const result = await pool.query(
       `SELECT r.*,
+        r.preset_winner_1, r.preset_winner_2, r.preset_winner_3,
         (SELECT COUNT(*) FROM cartela_purchases WHERE round_id = r.id) as total_purchases,
         ROW_NUMBER() OVER (ORDER BY r.started_at ASC) as game_number
        FROM rounds r
@@ -686,15 +687,35 @@ app.post('/api/admin/rounds/reveal-winner', authMiddleware, async (req: AuthRequ
   try {
     const roundResult = await pool.query(
       `SELECT id, preset_winner_1, preset_winner_2, preset_winner_3, winners_revealed,
-              prize_1, prize_2, prize_3
+              prize_1, prize_2, prize_3, total_cartelas
        FROM rounds WHERE status = 'open' AND operator_id = $1 ORDER BY started_at DESC LIMIT 1`,
       [req.user!.id]
     );
     if (roundResult.rows.length === 0) return res.status(404).json({ error: 'No active round' });
-    const round = roundResult.rows[0];
+    let round = roundResult.rows[0];
 
+    // If winners not pre-picked yet, pick them now from sold cartelas
     if (!round.preset_winner_1) {
-      return res.status(400).json({ error: 'Winners not yet pre-picked. Not all cartelas sold.' });
+      const soldResult = await pool.query(
+        'SELECT cartela_number FROM cartela_purchases WHERE round_id = $1',
+        [round.id]
+      );
+      const numbers: number[] = soldResult.rows.map((r: any) => r.cartela_number);
+      if (numbers.length < 3) {
+        return res.status(400).json({ error: `Need at least 3 sold cartelas to draw. Currently sold: ${numbers.length}` });
+      }
+      // Fisher-Yates shuffle
+      for (let i = numbers.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [numbers[i], numbers[j]] = [numbers[j], numbers[i]];
+      }
+      const [w1, w2, w3] = numbers;
+      await pool.query(
+        `UPDATE rounds SET preset_winner_1 = $1, preset_winner_2 = $2, preset_winner_3 = $3, winners_revealed = 0 WHERE id = $4`,
+        [w1, w2, w3, round.id]
+      );
+      round = { ...round, preset_winner_1: w1, preset_winner_2: w2, preset_winner_3: w3, winners_revealed: 0 };
+      console.log(`[Winners] On-demand pre-pick for round ${round.id}: ${w1}, ${w2}, ${w3}`);
     }
 
     const revealed: number = round.winners_revealed ?? 0;
